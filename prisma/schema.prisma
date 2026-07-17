@@ -1,0 +1,280 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model AppState {
+  id        String   @id @default("singleton")
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Listing {
+  id             String         @id
+  slug           String         @unique
+  title          String
+  make           String
+  model          String
+  year           Int
+  price          Int
+  city           String
+  area           String?
+  mileage        Int
+  fuel           String
+  transmission   String
+  body           String
+  sellerName     String
+  sellerPhone    String
+  sellerType     String
+  status         String         @default("pending")
+  verifiedSeller Boolean        @default(false)
+  certified      Boolean        @default(false)
+  featured       Boolean        @default(false)
+  premium        Boolean        @default(false)
+  data           Json
+  postedAt       DateTime       @default(now())
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  media          ListingMedia[]
+
+  @@index([status])
+  @@index([make])
+  @@index([city])
+  @@index([price])
+  @@index([year])
+}
+
+model ListingMedia {
+  id        String   @id @default(cuid())
+  listingId String
+  url       String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId])
+}
+
+model Profile {
+  id         String   @id
+  authUserId String?  @unique
+  name       String
+  phone      String?
+  email      String?
+  role       String?
+  language   String   @default("en")
+  verified   Boolean  @default(false)
+  data       Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Dealer {
+  id        String   @id
+  slug      String   @unique
+  name      String
+  owner     String?
+  city      String
+  area      String?
+  phone     String?
+  rating    Float?
+  inventory Int      @default(0)
+  verified  Boolean  @default(false)
+  plan      String?
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([city])
+  @@index([verified])
+}
+
+model Garage {
+  id          String   @id
+  name        String
+  city        String
+  area        String?
+  phone       String?
+  rating      Float?
+  inspections Int      @default(0)
+  data        Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([city])
+}
+
+model Auction {
+  id          String   @id
+  listingId   String
+  status      String
+  currentBid  Int      @default(0)
+  reservePrice Int     @default(0)
+  endsAt      DateTime?
+  data        Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([listingId])
+  @@index([status])
+}
+
+model Warranty {
+  id           String          @id
+  listingId    String
+  status       String
+  deposit      Int             @default(0)
+  escrowStatus String?
+  period       String?
+  data         Json
+  claims       WarrantyClaim[]
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([listingId])
+  @@index([status])
+}
+
+model WarrantyClaim {
+  id         String   @id
+  warrantyId String?
+  listingId  String
+  status     String
+  issue      String?
+  data       Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  warranty   Warranty? @relation(fields: [warrantyId], references: [id], onDelete: Cascade)
+
+  @@index([listingId])
+  @@index([status])
+  @@index([warrantyId])
+}
+
+model FinancePartner {
+  id        String   @id
+  bank      String
+  product   String
+  type      String?
+  maxLoan   Int      @default(0)
+  tenure    Int      @default(0)
+  rate      Float?
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bank])
+  @@index([type])
+}
+
+model Article {
+  id        String   @id
+  slug      String   @unique
+  seo       String?
+  title     Json
+  body      Json
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Enquiry {
+  id           String   @id
+  listingId    String
+  listingTitle String?
+  sellerName   String?
+  sellerPhone  String?
+  buyerName    String?
+  buyerPhone   String?
+  status       String   @default("new")
+  message      String?
+  data         Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([listingId])
+  @@index([status])
+}
+
+model SearchAlert {
+  id        String   @id
+  name      String
+  active    Boolean  @default(true)
+  matches   Int      @default(0)
+  filters   Json?
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active])
+}
+
+model KycRequest {
+  id        String   @id
+  sellerId  String?
+  name      String
+  type      String?
+  status    String   @default("pending")
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([sellerId])
+}
+
+model InspectionRequest {
+  id            String   @id
+  listingId     String
+  garageId      String?
+  name          String?
+  phone         String?
+  preferredDate DateTime?
+  status        String   @default("Requested")
+  data          Json
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([listingId])
+  @@index([garageId])
+  @@index([status])
+}
+
+model Notification {
+  id        String   @id
+  title     String
+  body      String?
+  channel   String?
+  status    String   @default("unread")
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+model SavedListing {
+  id        String   @id @default(cuid())
+  profileId String   @default("user-founder")
+  listingId String
+  createdAt DateTime @default(now())
+
+  @@unique([profileId, listingId])
+  @@index([listingId])
+}
+
+model CompareSelection {
+  id        String   @id @default(cuid())
+  profileId String   @default("user-founder")
+  listingId String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([profileId, listingId])
+  @@index([listingId])
+}

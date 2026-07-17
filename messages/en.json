@@ -1,0 +1,37 @@
+{
+  "brand": "BanglaWheel",
+  "tagline": "Buy, sell, inspect, trust",
+  "nav": {
+    "home": "Home",
+    "cars": "Cars",
+    "sell": "Sell",
+    "dealers": "Dealers",
+    "auction": "Auction",
+    "finance": "Finance",
+    "warranty": "Warranty",
+    "paperwork": "Paperwork",
+    "certified": "Certified",
+    "garages": "Garages",
+    "learn": "Learn",
+    "account": "Account",
+    "admin": "Admin"
+  },
+  "home": {
+    "headline": "Bangladesh's trust-first used car marketplace.",
+    "subhead": "Verified sellers, 100-point inspections, warranty escrow, live auctions, financing, BRTA paperwork guidance, and Bangla/English support in one complete prototype.",
+    "search": "Search Toyota Allion, Hybrid under 2,000,000 BDT...",
+    "recommended": "Recommended for you",
+    "nearby": "Cars near you"
+  },
+  "actions": {
+    "search": "Search",
+    "save": "Save",
+    "saved": "Saved",
+    "compare": "Compare",
+    "contact": "Contact",
+    "apply": "Apply",
+    "submit": "Submit",
+    "bookInspection": "Book inspection",
+    "placeBid": "Place bid"
+  }
+}
