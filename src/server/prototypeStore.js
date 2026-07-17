@@ -187,16 +187,33 @@ export function applyActionToState(state, type, payload = {}) {
       message = "Warranty claim submitted.";
       break;
     }
+    case "updateProfile": {
+      const patchValue = payload.patchValue || {};
+      next = { ...next, profile: { ...next.profile, ...patchValue } };
+      message = "Profile settings saved.";
+      break;
+    }
     case "updateItem": {
       const { collection, id, patchValue } = payload;
       if (!mutableCollections.has(collection)) {
         throw new Error(`Unsupported collection: ${collection}`);
       }
+      if (collection === "listings" && patchValue.certified === true) {
+        const listing = next.listings.find((item) => item.id === id);
+        const inspectionScore = Number(listing?.inspectionReport?.overall || 0);
+        if (inspectionScore < 70) {
+          throw new Error("A published inspection score of 70 or higher is required before certification.");
+        }
+      }
       next = {
         ...next,
         [collection]: next[collection].map((item) => item.id === id ? { ...item, ...patchValue } : item),
       };
-      message = "Admin queue updated.";
+      if (collection === "listings" && patchValue.status === "approved") message = "Listing approved and published.";
+      else if (collection === "listings" && patchValue.status === "pending") message = "Listing returned to pending review.";
+      else if (collection === "listings" && patchValue.status === "rejected") message = "Listing rejected and removed from the marketplace.";
+      else if (collection === "listings" && patchValue.certified) message = "Listing certified successfully.";
+      else message = "Admin queue updated.";
       break;
     }
     default:
