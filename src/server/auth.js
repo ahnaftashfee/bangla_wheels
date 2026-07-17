@@ -22,6 +22,7 @@ const permissions = {
   deleteListing: [roles.admin],
   updateItem: [roles.admin],
   updateRole: [roles.admin],
+  updateProfile: [roles.buyer, roles.seller, roles.dealer, roles.admin],
   reset: [roles.admin],
 };
 
@@ -31,7 +32,7 @@ function bearerToken(request) {
 }
 
 function roleFromUser(user) {
-  const metadataRole = user?.app_metadata?.role || user?.user_metadata?.role;
+  const metadataRole = user?.app_metadata?.role;
   return Object.values(roles).includes(metadataRole) && metadataRole !== roles.guest ? metadataRole : roles.buyer;
 }
 

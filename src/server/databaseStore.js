@@ -40,6 +40,18 @@ function fallbackId(prefix, item, index) {
   return item.id || `${prefix}-${index + 1}`;
 }
 
+function actionId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 7)}`;
+}
+
+function listingSlug(listing, suffix = "") {
+  const base = `${listing.year || ""}-${listing.make || ""}-${listing.model || "model"}-${listing.city || listing.division || "bangladesh"}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return suffix ? `${base}-${suffix}` : base;
+}
+
 function listingRecordData(listing) {
   return {
     id: listing.id,
@@ -536,6 +548,119 @@ export async function applyDatabaseAction(type, payload = {}, auth = {}) {
     });
 
     return { state: await readDatabaseState(auth), message: "Listing permanently deleted." };
+  }
+
+  if (type === "updateProfile") {
+    if (!auth.profile?.id) throw new Error("Profile not found.");
+    const allowed = payload.patchValue || {};
+    const profile = await prisma.profile.findUnique({ where: { id: auth.profile.id } });
+    if (!profile) throw new Error("Profile not found.");
+    const patchValue = {
+      name: String(allowed.name || profile.name).trim(),
+      phone: String(allowed.phone || "").trim(),
+      language: allowed.language === "bn" ? "bn" : "en",
+      budgetMin: Math.max(0, Number(allowed.budgetMin) || 0),
+      budgetMax: Math.max(0, Number(allowed.budgetMax) || 0),
+      division: String(allowed.division || "Dhaka"),
+    };
+    if (!patchValue.name) throw new Error("Name is required.");
+    if (patchValue.budgetMax < patchValue.budgetMin) throw new Error("Maximum budget must be greater than minimum budget.");
+    await prisma.profile.update({
+      where: { id: profile.id },
+      data: { name: patchValue.name, phone: patchValue.phone || null, language: patchValue.language, data: { ...(profile.data || {}), ...patchValue } },
+    });
+    return { state: await readDatabaseState(auth), message: "Profile settings saved." };
+  }
+
+  if (type === "updateItem") {
+    const { collection, id, patchValue = {} } = payload;
+    if (!id) throw new Error("Record id is required.");
+
+    if (collection === "listings") {
+      const listing = await prisma.listing.findUnique({ where: { id } });
+      if (!listing) throw new Error("Listing not found.");
+      if (patchValue.certified === true) {
+        const inspectionScore = Number(listing.data?.inspectionReport?.overall || 0);
+        if (inspectionScore < 70) {
+          throw new Error("A published inspection score of 70 or higher is required before certification.");
+        }
+      }
+      const data = { ...(listing.data || {}), ...patchValue };
+      const scalar = {};
+      if (patchValue.status !== undefined) scalar.status = patchValue.status;
+      if (patchValue.verifiedSeller !== undefined) scalar.verifiedSeller = Boolean(patchValue.verifiedSeller);
+      if (patchValue.certified !== undefined) scalar.certified = Boolean(patchValue.certified);
+      if (patchValue.featured !== undefined) scalar.featured = Boolean(patchValue.featured);
+      if (patchValue.premium !== undefined) scalar.premium = Boolean(patchValue.premium);
+      await prisma.listing.update({ where: { id }, data: { ...scalar, data } });
+      const message = patchValue.status === "approved" ? "Listing approved and published."
+        : patchValue.status === "pending" ? "Listing returned to pending review."
+          : patchValue.status === "rejected" ? "Listing rejected and removed from the marketplace."
+            : patchValue.certified ? "Listing certified successfully." : "Listing updated.";
+      return { state: await readDatabaseState(auth), message };
+    }
+
+    const modelByCollection = {
+      kycRequests: "kycRequest",
+      inspections: "inspectionRequest",
+      enquiries: "enquiry",
+      alerts: "searchAlert",
+      notifications: "notification",
+    };
+    const model = modelByCollection[collection];
+    if (!model) throw new Error(`Unsupported collection: ${collection}`);
+    const record = await prisma[model].findUnique({ where: { id } });
+    if (!record) throw new Error("Record not found.");
+    const scalar = {};
+    if (patchValue.status !== undefined) scalar.status = patchValue.status;
+    if (patchValue.active !== undefined) scalar.active = Boolean(patchValue.active);
+    await prisma[model].update({ where: { id }, data: { ...scalar, data: { ...(record.data || {}), ...patchValue } } });
+    return { state: await readDatabaseState(auth), message: `${collection === "kycRequests" ? "Seller verification" : collection === "inspections" ? "Inspection" : "Record"} updated successfully.` };
+  }
+
+  if (type === "addListing") {
+    if (!payload.listing?.model || !payload.listing?.chassis || !payload.listing?.phone) throw new Error("Model, chassis, and phone are required.");
+    if (!Array.isArray(payload.listing.media) || payload.listing.media.length === 0) throw new Error("At least one vehicle photo is required.");
+    const suffix = Math.random().toString(16).slice(2, 7);
+    const listing = { ...payload.listing, sellerId: auth.profile?.id, sellerName: auth.profile?.name || payload.listing.sellerName, id: actionId("bw"), slug: listingSlug(payload.listing, suffix), status: "pending", postedAt: new Date().toISOString(), views: 0 };
+    await prisma.$transaction((tx) => upsertListingWithTx(tx, listing));
+    return { state: await readDatabaseState(auth), message: "Listing submitted to admin moderation." };
+  }
+
+  if (type === "submitLead") {
+    const lead = { id: actionId("lead"), status: "new", createdAt: new Date().toISOString(), ...payload.lead };
+    await prisma.$transaction(async (tx) => {
+      await tx.enquiry.create({ data: enquiryRecord(lead, 0) });
+      const listing = await tx.listing.findUnique({ where: { id: lead.listingId } });
+      if (listing) await tx.listing.update({ where: { id: listing.id }, data: { data: { ...(listing.data || {}), views: Number(listing.data?.views || 0) + 1 } } });
+    });
+    return { state: await readDatabaseState(auth), message: "Enquiry sent. The seller can now contact you." };
+  }
+
+  if (type === "createAlert") {
+    const alert = { id: actionId("alert"), active: true, createdAt: new Date().toISOString(), ...payload.alert };
+    await prisma.searchAlert.create({ data: alertRecord(alert, 0) });
+    return { state: await readDatabaseState(auth), message: "Saved-search alert created." };
+  }
+
+  if (type === "addKyc") {
+    const kyc = { id: actionId("kyc"), status: "pending", createdAt: new Date().toISOString(), ...payload.kyc, sellerId: auth.profile?.id };
+    await prisma.kycRequest.create({ data: kycRecord(kyc, 0) });
+    return { state: await readDatabaseState(auth), message: "Seller verification submitted for admin review." };
+  }
+
+  if (type === "addInspection") {
+    const inspection = { id: actionId("inspection"), status: "Requested", createdAt: new Date().toISOString(), ...payload.inspection };
+    await prisma.inspectionRequest.create({ data: inspectionRecord(inspection, 0) });
+    return { state: await readDatabaseState(auth), message: "Inspection requested successfully." };
+  }
+
+  if (type === "addClaim") {
+    const warranty = await prisma.warranty.findFirst({ where: { listingId: payload.claim?.listingId } });
+    if (!warranty) throw new Error("No active warranty found for this car.");
+    const claim = { id: actionId("claim"), status: "Submitted", createdAt: new Date().toISOString(), ...payload.claim };
+    await prisma.warrantyClaim.create({ data: claimRecord(claim, warranty.id, warranty.listingId, 0) });
+    return { state: await readDatabaseState(auth), message: "Warranty claim submitted." };
   }
 
   const current = await readDatabaseState(auth);

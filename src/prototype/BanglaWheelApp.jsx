@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import {
   AlertCircle,
   BadgeCheck,
@@ -38,6 +38,7 @@ import {
   Sparkles,
   Star,
   Store,
+  Trash2,
   Upload,
   UserRound,
   WalletCards,
@@ -47,6 +48,7 @@ import { useLocaleController } from "./RootProviders";
 import { bodies, cities, featureGroups, fuels, inspectionSections, legalCopy, makes, transmissions } from "./platformSeed";
 import { createPrototypeServices } from "../services/mockServices";
 import { authConfigured, supabaseBrowser } from "../lib/supabaseBrowser";
+import { backdropMotion, drawerMotion, itemMotion, modalMotion, motionSpring, pageMotion, panelMotion, popoverMotion, toastMotion } from "./motion";
 
 const storageKey = "banglawheel:prototype:v2";
 
@@ -105,18 +107,29 @@ const initialPrototypeState = {
   authOpen: false,
   authUser: null,
   authReady: false,
+  authPending: false,
+  pendingAction: "",
   toast: "",
 };
+
+function mutationKey(type, payload = {}) {
+  if (type === "updateItem") return `${type}:${payload.collection}:${payload.id}`;
+  return `${type}:${payload.id || payload.profileId || payload.listingId || ""}`;
+}
 
 function useBackendPrototype() {
   const [state, setState] = useState(initialPrototypeState);
   const [ready, setReady] = useState(false);
   const [session, setSession] = useState(null);
+  const loadedSessionToken = useRef(null);
 
   useEffect(() => {
     const controller = new AbortController();
     let subscription;
     async function loadState(authSession = null) {
+      const sessionToken = authSession?.access_token || "guest";
+      if (loadedSessionToken.current === sessionToken) return;
+      loadedSessionToken.current = sessionToken;
       try {
         const headers = authSession?.access_token ? { Authorization: `Bearer ${authSession.access_token}` } : {};
         const response = await fetch("/api/state", { cache: "no-store", signal: controller.signal, headers });
@@ -131,9 +144,12 @@ function useBackendPrototype() {
           authOpen: current.authOpen,
           authUser: authSession?.user || null,
           authReady: true,
+          authPending: current.authPending,
+          pendingAction: current.pendingAction,
           toast: current.toast,
         }));
       } catch (error) {
+        if (loadedSessionToken.current === sessionToken) loadedSessionToken.current = null;
         if (error.name !== "AbortError") {
           setState((current) => ({ ...current, toast: "Backend unavailable. Using starter data for this session." }));
         }
@@ -165,6 +181,8 @@ function useBackendPrototype() {
   const setUi = (patchValue) => setState((current) => ({ ...current, ...(typeof patchValue === "function" ? patchValue(current) : patchValue) }));
 
   const mutate = async (type, payload = {}, mergeUi = {}) => {
+    const pendingAction = mutationKey(type, payload);
+    setState((current) => ({ ...current, pendingAction }));
     try {
       const response = await fetch("/api/state", {
         method: "POST",
@@ -181,12 +199,14 @@ function useBackendPrototype() {
         authOpen: current.authOpen,
         authUser: current.authUser,
         authReady: current.authReady,
+        authPending: current.authPending,
+        pendingAction: "",
         toast: result.message || current.toast,
         ...(typeof mergeUi === "function" ? mergeUi(current, result.state) : mergeUi),
       }));
       return result.state;
     } catch (error) {
-      setState((current) => ({ ...current, toast: error.message || "Unable to save changes." }));
+      setState((current) => ({ ...current, pendingAction: "", toast: error.message || "Unable to save changes." }));
       return null;
     }
   };
@@ -196,9 +216,10 @@ function useBackendPrototype() {
       setUi({ toast: "Supabase auth is not configured yet." });
       return;
     }
+    setUi({ authPending: true });
     const { error } = await supabaseBrowser.auth.signInWithPassword({ email, password });
-    if (error) setUi({ toast: error.message });
-    else setUi({ authOpen: false, toast: "Signed in." });
+    if (error) setUi({ authPending: false, toast: error.message });
+    else setUi({ authOpen: false, authPending: false, toast: "Signed in." });
   };
 
   const signUp = async ({ email, password, name }) => {
@@ -206,9 +227,10 @@ function useBackendPrototype() {
       setUi({ toast: "Supabase auth is not configured yet." });
       return;
     }
+    setUi({ authPending: true });
     const { error } = await supabaseBrowser.auth.signUp({ email, password, options: { data: { name } } });
-    if (error) setUi({ toast: error.message });
-    else setUi({ authOpen: false, toast: "Account created. Check your email if confirmation is enabled." });
+    if (error) setUi({ authPending: false, toast: error.message });
+    else setUi({ authOpen: false, authPending: false, toast: "Account created. Check your email if confirmation is enabled." });
   };
 
   const signOut = async () => {
@@ -227,8 +249,9 @@ function Button({ children, variant = "primary", className = "", ...props }) {
     secondary: "bg-white text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50",
     subtle: "bg-slate-100 text-slate-700 hover:bg-slate-200",
     ghost: "bg-transparent text-slate-700 hover:bg-slate-100",
+    success: "bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-600/20",
   };
-  return <button className={classNames("inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-black transition active:scale-[0.98] disabled:opacity-50", styles[variant], className)} {...props}>{children}</button>;
+  return <button className={classNames("motion-control inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-black outline-none focus-visible:ring-4 focus-visible:ring-blue-200 disabled:cursor-not-allowed disabled:opacity-60", styles[variant], className)} {...props}>{children}</button>;
 }
 
 function Badge({ children, variant = "default", className = "" }) {
@@ -249,20 +272,20 @@ function Field({ label, children }) {
 }
 
 function TextInput({ label, className = "", ...props }) {
-  return <Field label={label}><input className={classNames("h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-blue-600 focus:ring-4 focus:ring-blue-100", className)} {...props} /></Field>;
+  return <Field label={label}><input className={classNames("motion-field h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-600 focus:ring-4 focus:ring-blue-100", className)} {...props} /></Field>;
 }
 
 function SelectField({ label, children, className = "", ...props }) {
-  return <Field label={label}><select className={classNames("h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-800 outline-none transition focus:border-blue-600 focus:ring-4 focus:ring-blue-100", className)} {...props}>{children}</select></Field>;
+  return <Field label={label}><select className={classNames("motion-field h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-600 focus:ring-4 focus:ring-blue-100", className)} {...props}>{children}</select></Field>;
 }
 
 function TextArea({ label, className = "", ...props }) {
-  return <Field label={label}><textarea className={classNames("min-h-28 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-blue-600 focus:ring-4 focus:ring-blue-100", className)} {...props} /></Field>;
+  return <Field label={label}><textarea className={classNames("motion-field min-h-28 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-600 focus:ring-4 focus:ring-blue-100", className)} {...props} /></Field>;
 }
 
 function StatCard({ label, value, icon: Icon, tone = "blue" }) {
   const tones = { blue: "bg-blue-50 text-blue-700", red: "bg-red-50 text-red-700", green: "bg-emerald-50 text-emerald-700", yellow: "bg-amber-50 text-amber-700", purple: "bg-violet-50 text-violet-700" };
-  return <div className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200"><div className="flex items-center justify-between"><div className={classNames("flex h-11 w-11 items-center justify-center rounded-lg", tones[tone])}><Icon className="h-5 w-5" /></div><ChevronRight className="h-5 w-5 text-slate-300" /></div><p className="mt-5 text-3xl font-black text-slate-950">{value}</p><p className="mt-1 text-sm font-bold text-slate-500">{label}</p></div>;
+  return <div className="motion-card rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200"><div className="flex items-center justify-between"><div className={classNames("flex h-11 w-11 items-center justify-center rounded-lg", tones[tone])}><Icon className="h-5 w-5" /></div><ChevronRight className="h-5 w-5 text-slate-300" /></div><p className="mt-5 text-3xl font-black text-slate-950">{value}</p><p className="mt-1 text-sm font-bold text-slate-500">{label}</p></div>;
 }
 
 const primaryNavItems = [
@@ -285,49 +308,78 @@ const exploreGroups = [
   ]],
 ];
 
-const pageMotion = {
-  initial: { opacity: 0, y: 8 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: 4 },
-  transition: { duration: 0.16, ease: "easeOut" },
-};
-
 export function BanglaWheelApp() {
   const t = useTranslations();
-  const router = useRouter();
-  const pathname = usePathname();
-  const params = useSearchParams();
+  const initialPathname = usePathname();
+  const initialParams = useSearchParams();
+  const [location, setLocation] = useState(() => ({ pathname: initialPathname, search: initialParams.toString() }));
+  const pathname = location.pathname;
+  const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const { locale, setLocale } = useLocaleController();
   const [state, backend] = useBackendPrototype();
   const [mobileOpen, setMobileOpen] = useState(false);
   const services = useMemo(() => createPrototypeServices(state), [state]);
 
+  useEffect(() => {
+    const syncLocation = () => setLocation({ pathname: window.location.pathname, search: window.location.search.slice(1) });
+    window.addEventListener("popstate", syncLocation);
+    return () => window.removeEventListener("popstate", syncLocation);
+  }, []);
+
   const go = (path) => {
-    router.push(path);
+    const nextUrl = new URL(path, window.location.href);
+    if (nextUrl.origin !== window.location.origin) {
+      window.location.assign(nextUrl.href);
+      return;
+    }
+    const nextLocation = { pathname: nextUrl.pathname, search: nextUrl.search.slice(1) };
+    if (nextLocation.pathname !== pathname || nextLocation.search !== location.search) {
+      window.history.pushState(null, "", `${nextLocation.pathname}${nextUrl.search}${nextUrl.hash}`);
+      setLocation(nextLocation);
+    }
     setMobileOpen(false);
-    window.scrollTo({ top: 0 });
+    window.scrollTo({ top: 0, behavior: "instant" });
   };
 
   const listings = state.listings.filter((item) => item.status === "approved");
   const currentListing = listings.find((item) => pathname === `/cars/${item.slug}` || pathname === `/cars/${item.id}`);
 
+  const requireLogin = (callback, message) => (...args) => {
+    if (state.authUser) return callback(...args);
+    backend.setUi({ authOpen: true, toast: message });
+    return Promise.resolve(null);
+  };
+
   const actions = {
     go,
     services,
-    toggleSave: (id) => backend.mutate("toggleSave", { id }),
-    toggleCompare: (id) => backend.mutate("toggleCompare", { id }),
-    openContact: (listing) => backend.setUi({ contactListing: listing }),
-    submitLead: (lead) => backend.mutate("submitLead", { lead }, { contactListing: null }),
-    createAlert: (alert) => backend.mutate("createAlert", { alert }),
+    isPending: (type, id = "", collection = "") => state.pendingAction === (type === "updateItem" ? `${type}:${collection}:${id}` : `${type}:${id}`),
+    notify: (message) => backend.setUi({ toast: message }),
+    toggleSave: requireLogin((id) => backend.mutate("toggleSave", { id }), "Login to save cars to your account."),
+    toggleCompare: requireLogin((id) => backend.mutate("toggleCompare", { id }), "Login to build and keep a car comparison."),
+    openContact: (listing) => listing && !state.authUser ? backend.setUi({ authOpen: true, toast: "Login to contact this seller." }) : backend.setUi({ contactListing: listing }),
+    submitLead: requireLogin((lead) => backend.mutate("submitLead", { lead }, { contactListing: null }), "Login before sending an enquiry."),
+    createAlert: requireLogin((alert) => backend.mutate("createAlert", { alert }), "Login to create a saved-search alert."),
     addListing: (listing) => backend.mutate("addListing", { listing }),
-    addKyc: (kyc) => backend.mutate("addKyc", { kyc }),
-    addInspection: (inspection) => backend.mutate("addInspection", { inspection }),
+    addKyc: requireLogin((kyc) => backend.mutate("addKyc", { kyc }), "Login before submitting seller verification."),
+    addInspection: requireLogin((inspection) => backend.mutate("addInspection", { inspection }), "Login before requesting an inspection."),
     // Auction launch is deferred. Restore bidding mutations when live bidding returns.
     // addBid: (auctionId, amount, maxAutoBid = "") => backend.mutate("addBid", { auctionId, amount, maxAutoBid }),
-    addClaim: (claim) => backend.mutate("addClaim", { claim }),
+    addClaim: requireLogin((claim) => backend.mutate("addClaim", { claim }), "Login before submitting a warranty claim."),
     updateItem: (collection, id, patchValue) => backend.mutate("updateItem", { collection, id, patchValue }),
     updateRole: (profileId, role) => backend.mutate("updateRole", { profileId, role }),
+    updateProfile: (patchValue) => backend.mutate("updateProfile", { patchValue }),
     deleteListing: (id) => backend.mutate("deleteListing", { id }),
+    shareListing: async (listing) => {
+      const url = `${window.location.origin}/cars/${listing.slug}`;
+      try {
+        if (navigator.share) await navigator.share({ title: listing.title, text: `${listing.title} on BanglaWheel`, url });
+        else await navigator.clipboard.writeText(url);
+        backend.setUi({ toast: navigator.share ? "Listing shared." : "Listing link copied." });
+      } catch (error) {
+        if (error?.name !== "AbortError") backend.setUi({ toast: "Unable to share this listing." });
+      }
+    },
     setCookieOk: () => {
       window.localStorage.setItem(storageKey, "accepted");
       backend.setUi({ cookieOk: true });
@@ -366,10 +418,11 @@ export function BanglaWheelApp() {
   else if (pathname === "/compare") page = <ComparePage state={state} actions={actions} />;
   else if (needsAccount) page = authHydrating ? <AuthLoading /> : signedIn ? <AccountPage state={state} actions={actions} path={pathname} locale={locale} setLocale={setLocale} /> : <AuthRequired title="Account login required" text="Sign in to manage saved cars, listings, KYC, alerts, and warranty claims." actions={actions} />;
   else if (needsAdmin) page = authHydrating ? <AuthLoading /> : role === "admin" ? <AdminPage state={state} actions={actions} path={pathname} /> : <AuthRequired title="Admin access required" text="This console is restricted to BanglaWheel admin accounts." actions={actions} />;
-  else if (["/privacy-policy", "/terms-of-service", "/data-deletion", "/about"].includes(pathname)) page = <LegalPage slug={pathname.slice(1)} />;
+  else if (["/privacy-policy", "/terms-of-service", "/data-deletion", "/about"].includes(pathname)) page = <LegalPage slug={pathname.slice(1)} actions={actions} />;
   else if (pathname === "/parts") page = <ExtensionPage />;
 
   return (
+    <MotionConfig reducedMotion="user" transition={motionSpring.responsive}>
     <div className="min-h-screen bg-[#f4f7fb]">
       <Header t={t} state={state} actions={actions} pathname={pathname} go={go} locale={locale} setLocale={setLocale} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
       {currentListing && <VehicleJsonLd listing={currentListing} />}
@@ -381,13 +434,14 @@ export function BanglaWheelApp() {
       >
         {page}
       </motion.div>
-      <FloatingCompare state={state} actions={actions} />
+      <AnimatePresence>{state.compare.length > 0 && <FloatingCompare key="floating-compare" state={state} actions={actions} />}</AnimatePresence>
       <Footer go={go} />
       <ContactModal state={state} actions={actions} />
       <AuthModal state={state} actions={actions} />
       <Toast message={state.toast} onClose={() => backend.setUi({ toast: "" })} />
-      {!state.cookieOk && <CookieBanner onAccept={actions.setCookieOk} />}
+      <AnimatePresence>{!state.cookieOk && <CookieBanner key="cookie-banner" onAccept={actions.setCookieOk} />}</AnimatePresence>
     </div>
+    </MotionConfig>
   );
 }
 
@@ -421,19 +475,20 @@ function Header({ t, state, actions, pathname, go, locale, setLocale, mobileOpen
           </button>
           <nav className="hidden items-center gap-1 xl:flex">
             {primaryNavItems.map(([label, path]) => (
-              <button key={path} onClick={() => go(path)} className={classNames("rounded-lg px-3 py-2 text-sm font-black transition", active(path) ? "bg-blue-50 text-blue-700" : "text-slate-700 hover:bg-slate-100 hover:text-red-600")}>{t(`nav.${label.toLowerCase()}`)}</button>
+              <button key={path} onClick={() => go(path)} className={classNames("motion-control rounded-lg px-3 py-2 text-sm font-black", active(path) ? "bg-blue-50 text-blue-700" : "text-slate-700 hover:bg-slate-100 hover:text-red-600")}>{t(`nav.${label.toLowerCase()}`)}</button>
             ))}
             <div className="relative">
-              <button onClick={() => setExploreOpen((value) => !value)} className={classNames("inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-black transition", exploreOpen ? "bg-slate-950 text-white" : "text-slate-700 hover:bg-slate-100 hover:text-red-600")}>Explore <ChevronDown className="h-4 w-4" /></button>
+              <button onClick={() => setExploreOpen((value) => !value)} aria-expanded={exploreOpen} className={classNames("motion-control inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-black", exploreOpen ? "bg-slate-950 text-white" : "text-slate-700 hover:bg-slate-100 hover:text-red-600")}>Explore <motion.span animate={{ rotate: exploreOpen ? 180 : 0 }} transition={{ duration: 0.2 }}><ChevronDown className="h-4 w-4" /></motion.span></button>
+              <AnimatePresence>
               {exploreOpen && (
-                <div className="absolute right-0 top-12 w-[460px] rounded-2xl bg-white p-4 text-left shadow-2xl ring-1 ring-slate-200">
+                <motion.div {...popoverMotion} className="absolute right-0 top-12 w-[460px] origin-top-right rounded-2xl bg-white p-4 text-left shadow-2xl ring-1 ring-slate-200">
                   <div className="grid grid-cols-2 gap-4">
                     {exploreGroups.map(([group, links]) => (
                       <div key={group}>
                         <p className="px-2 text-xs font-black uppercase tracking-wide text-slate-400">{group}</p>
                         <div className="mt-2 grid gap-1">
                           {links.filter(([label]) => isAdmin || label !== "Admin Console").map(([label, path, Icon]) => (
-                            <button key={path} onClick={() => jump(path)} className="group flex items-center gap-3 rounded-xl px-3 py-3 text-left transition hover:bg-blue-50">
+                            <button key={path} onClick={() => jump(path)} className="motion-control group flex items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-blue-50">
                               <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-blue-700 group-hover:bg-blue-700 group-hover:text-white"><Icon className="h-4 w-4" /></span>
                               <span className="text-sm font-black text-slate-800">{label}</span>
                             </button>
@@ -442,8 +497,9 @@ function Header({ t, state, actions, pathname, go, locale, setLocale, mobileOpen
                       </div>
                     ))}
                   </div>
-                </div>
+                </motion.div>
               )}
+              </AnimatePresence>
             </div>
           </nav>
           <div className="hidden items-center gap-2 lg:flex">
@@ -462,10 +518,11 @@ function Header({ t, state, actions, pathname, go, locale, setLocale, mobileOpen
             )}
             <Button onClick={() => go("/sell")}><Car className="h-4 w-4" /> Post Ad</Button>
           </div>
-          <button className="rounded-lg p-2 hover:bg-slate-100 xl:hidden" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Toggle menu">{mobileOpen ? <X /> : <Menu />}</button>
+          <button className="motion-control rounded-lg p-2 hover:bg-slate-100 xl:hidden" onClick={() => setMobileOpen(!mobileOpen)} aria-label="Toggle menu" aria-expanded={mobileOpen}><AnimatePresence initial={false} mode="wait"><motion.span key={mobileOpen ? "close" : "menu"} initial={{ opacity: 0, rotate: -8, scale: 0.94 }} animate={{ opacity: 1, rotate: 0, scale: 1 }} exit={{ opacity: 0, rotate: 8, scale: 0.94 }} transition={{ duration: 0.18 }} className="block">{mobileOpen ? <X /> : <Menu />}</motion.span></AnimatePresence></button>
         </div>
+        <AnimatePresence>
         {mobileOpen && (
-          <div className="max-h-[calc(100vh-88px)] overflow-y-auto border-t border-slate-100 bg-white px-4 py-4 xl:hidden">
+          <motion.div {...drawerMotion} className="absolute left-0 right-0 top-full max-h-[calc(100vh-88px)] overflow-y-auto border-t border-slate-100 bg-white px-4 py-4 shadow-xl xl:hidden">
             <div className="grid gap-2 sm:grid-cols-2">
               {primaryNavItems.map(([label, path, Icon]) => <button key={path} onClick={() => go(path)} className="flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-black text-slate-700 hover:bg-slate-100"><Icon className="h-4 w-4 text-blue-700" /> {t(`nav.${label.toLowerCase()}`)}</button>)}
               <button onClick={() => go("/compare")} className="flex items-center gap-3 rounded-lg bg-blue-50 px-3 py-3 text-left text-sm font-black text-blue-800"><BarChart3 className="h-4 w-4" /> Compare {state.compare.length}/3</button>
@@ -481,8 +538,9 @@ function Header({ t, state, actions, pathname, go, locale, setLocale, mobileOpen
                 </div>
               ))}
             </div>
-          </div>
+          </motion.div>
         )}
+        </AnimatePresence>
       </header>
     </>
   );
@@ -506,16 +564,16 @@ function AuthLoading() {
     <main className="mx-auto max-w-3xl px-4 py-16 sm:px-6 lg:px-8">
       <div className="rounded-2xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
         <div className="flex items-center gap-4">
-          <div className="h-12 w-12 animate-pulse rounded-xl bg-blue-100" />
+          <div className="motion-skeleton h-12 w-12 rounded-xl bg-blue-100" />
           <div className="min-w-0 flex-1">
-            <div className="h-4 w-36 animate-pulse rounded-full bg-slate-200" />
-            <div className="mt-3 h-8 w-64 max-w-full animate-pulse rounded-lg bg-slate-100" />
+            <div className="motion-skeleton h-4 w-36 rounded-full bg-slate-200" />
+            <div className="motion-skeleton mt-3 h-8 w-64 max-w-full rounded-lg bg-slate-100" />
           </div>
         </div>
         <div className="mt-8 grid gap-3">
-          <div className="h-16 animate-pulse rounded-xl bg-slate-50" />
-          <div className="h-16 animate-pulse rounded-xl bg-slate-50" />
-          <div className="h-16 animate-pulse rounded-xl bg-slate-50" />
+          <div className="motion-skeleton h-16 rounded-xl bg-slate-50" />
+          <div className="motion-skeleton h-16 rounded-xl bg-slate-50" />
+          <div className="motion-skeleton h-16 rounded-xl bg-slate-50" />
         </div>
       </div>
     </main>
@@ -525,7 +583,14 @@ function AuthLoading() {
 function AuthModal({ state, actions }) {
   const [mode, setMode] = useState("signin");
   const [form, setForm] = useState({ name: "", email: "", password: "" });
-  if (!state.authOpen) return null;
+  useEffect(() => {
+    if (!state.authOpen) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape" && !state.authPending) actions.closeAuth();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [actions, state.authOpen, state.authPending]);
 
   const submit = (event) => {
     event.preventDefault();
@@ -534,27 +599,31 @@ function AuthModal({ state, actions }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[120] bg-slate-950/70 p-4 backdrop-blur-sm" onClick={actions.closeAuth}>
-      <form onSubmit={submit} className="mx-auto mt-16 max-w-md rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+    <AnimatePresence>
+    {state.authOpen && (
+    <motion.div {...backdropMotion} className="fixed inset-0 z-[120] bg-slate-950/70 p-4 backdrop-blur-sm" onClick={actions.closeAuth}>
+      <motion.form {...modalMotion} role="dialog" aria-modal="true" aria-labelledby="auth-modal-title" onSubmit={submit} className="mx-auto mt-16 max-w-md rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-4">
           <div>
             <Badge variant="blue"><ShieldCheck className="h-3.5 w-3.5" /> Secure account</Badge>
-            <h2 className="mt-3 text-2xl font-black text-slate-950">{mode === "signup" ? "Create account" : "Login to BanglaWheel"}</h2>
+            <h2 id="auth-modal-title" className="mt-3 text-2xl font-black text-slate-950">{mode === "signup" ? "Create account" : "Login to BanglaWheel"}</h2>
           </div>
-          <button type="button" onClick={actions.closeAuth} className="rounded-full p-2 hover:bg-slate-100"><X className="h-5 w-5" /></button>
+          <button type="button" onClick={actions.closeAuth} className="motion-control rounded-full p-2 hover:bg-slate-100" aria-label="Close login"><X className="h-5 w-5" /></button>
         </div>
         {!authConfigured && <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm font-black text-amber-800">Supabase auth is missing the public key in env.</p>}
         <div className="mt-5 grid gap-4">
-          {mode === "signup" && <TextInput label="Name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />}
+          <AnimatePresence initial={false}>{mode === "signup" && <motion.div {...panelMotion}><TextInput label="Name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required /></motion.div>}</AnimatePresence>
           <TextInput label="Email" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
           <TextInput label="Password" type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required minLength={6} />
         </div>
-        <Button className="mt-5 w-full" type="submit" variant="blue" disabled={!authConfigured}>{mode === "signup" ? "Create account" : "Login"}</Button>
+        <Button className="mt-5 w-full" type="submit" variant="blue" disabled={!authConfigured || state.authPending} aria-busy={state.authPending}>{state.authPending ? <><RefreshCw className="h-4 w-4 animate-spin" /> Please wait...</> : mode === "signup" ? "Create account" : "Login"}</Button>
         <button type="button" onClick={() => setMode(mode === "signup" ? "signin" : "signup")} className="mt-4 w-full text-sm font-black text-blue-700 hover:text-blue-900">
           {mode === "signup" ? "Already have an account? Login" : "New here? Create account"}
         </button>
-      </form>
-    </div>
+      </motion.form>
+    </motion.div>
+    )}
+    </AnimatePresence>
   );
 }
 
@@ -619,9 +688,9 @@ function ListingCard({ listing, state, actions, compact = false }) {
   const saved = state.saved.includes(listing.id);
   const compared = state.compare.includes(listing.id);
   return (
-    <article className={classNames("group overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200 transition hover:-translate-y-1 hover:shadow-xl", compact && "grid md:grid-cols-[240px_1fr]")}>
+    <motion.article layout="position" {...itemMotion} className={classNames("motion-card group overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200 hover:shadow-xl", compact && "grid md:grid-cols-[240px_1fr]")}>
       <button onClick={() => actions.go(`/cars/${listing.slug}`)} className={classNames("relative block w-full overflow-hidden bg-slate-200 text-left", compact ? "h-56 md:h-full" : "h-52")}>
-        <img src={listing.media[0]} alt={listing.title} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
+        <img src={listing.media[0]} alt={listing.title} className="h-full w-full object-cover transition-transform duration-[380ms] ease-out group-hover:scale-[1.02]" />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950/65 via-transparent to-transparent" />
         <div className="absolute left-3 top-3 flex flex-wrap gap-2">{listing.featured && <Badge variant="yellow"><Star className="h-3.5 w-3.5" /> Featured</Badge>}{listing.certified && <Badge variant="green"><BadgeCheck className="h-3.5 w-3.5" /> Certified</Badge>}{/* Auction launch is deferred. Restore this bid badge when live bidding returns. */}{/* {listing.auctionEnabled && <Badge variant="purple"><Gavel className="h-3.5 w-3.5" /> Bid</Badge>} */}</div>
         <div className="absolute bottom-3 left-3 flex items-center gap-2 rounded-full bg-slate-950/75 px-3 py-1 text-xs font-bold text-white backdrop-blur"><Camera className="h-3.5 w-3.5" /> {listing.media.length + 8} photos</div>
@@ -631,19 +700,20 @@ function ListingCard({ listing, state, actions, compact = false }) {
         <div className="flex items-center justify-between gap-3"><Badge variant={listing.verifiedSeller ? "green" : "yellow"}>{listing.verifiedSeller ? <ShieldCheck className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}{listing.verifiedSeller ? "Verified seller" : "KYC pending"}</Badge><span className="text-xs font-bold text-slate-400">{listing.views.toLocaleString()} views</span></div>
         <button onClick={() => actions.go(`/cars/${listing.slug}`)} className="mt-3 block text-left"><h3 className="line-clamp-1 text-lg font-black text-slate-950">{listing.title}</h3><p className="mt-1 flex items-center gap-1 text-sm font-semibold text-slate-500"><MapPin className="h-4 w-4 text-red-500" /> {listing.area}, {listing.city}</p></button>
         <div className="mt-4 grid grid-cols-2 gap-2 text-sm font-semibold text-slate-600"><div className="rounded-lg bg-slate-50 p-3"><Car className="mb-1 h-4 w-4 text-blue-700" /> {listing.year}</div><div className="rounded-lg bg-slate-50 p-3"><Settings className="mb-1 h-4 w-4 text-blue-700" /> {listing.transmission}</div><div className="rounded-lg bg-slate-50 p-3"><Sparkles className="mb-1 h-4 w-4 text-blue-700" /> {listing.fuel}</div><div className="rounded-lg bg-slate-50 p-3"><MapPin className="mb-1 h-4 w-4 text-blue-700" /> 8 km away</div></div>
-        <div className="mt-5 grid grid-cols-3 gap-2 border-t border-slate-100 pt-4"><Button variant={saved ? "primary" : "secondary"} className="px-2" onClick={() => actions.toggleSave(listing.id)}><Heart className={classNames("h-4 w-4", saved && "fill-white")} /></Button><Button variant={compared ? "blue" : "secondary"} className="px-2" onClick={() => actions.toggleCompare(listing.id)}><BarChart3 className="h-4 w-4" /></Button><Button className="px-2" variant="blue" onClick={() => actions.openContact(listing)}><Phone className="h-4 w-4" /></Button></div>
+        <div className="mt-5 grid grid-cols-3 gap-2 border-t border-slate-100 pt-4"><Button variant={saved ? "primary" : "secondary"} className="px-2" disabled={actions.isPending("toggleSave", listing.id)} onClick={() => actions.toggleSave(listing.id)} aria-label={saved ? "Remove from saved cars" : "Save car"} title={saved ? "Remove from saved cars" : "Save car"}><Heart className={classNames("h-4 w-4", saved && "fill-white")} /></Button><Button variant={compared ? "blue" : "secondary"} className="px-2" disabled={actions.isPending("toggleCompare", listing.id)} onClick={() => actions.toggleCompare(listing.id)} aria-label={compared ? "Remove from comparison" : "Add to comparison"} title={compared ? "Remove from comparison" : "Add to comparison"}><BarChart3 className="h-4 w-4" /></Button><Button className="px-2" variant="blue" onClick={() => actions.openContact(listing)} aria-label="Contact seller" title="Contact seller"><Phone className="h-4 w-4" /></Button></div>
       </div>
-    </article>
+    </motion.article>
   );
 }
 
 function FloatingCompare({ state, actions }) {
-  if (!state.compare.length) return null;
   const selected = state.listings.filter((listing) => state.compare.includes(listing.id)).slice(0, 3);
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 12, scale: 0.98 }}
+      transition={motionSpring.responsive}
       className="fixed bottom-5 right-5 z-[90] hidden w-[360px] rounded-2xl bg-slate-950 p-3 text-white shadow-2xl ring-1 ring-white/10 lg:block"
     >
       <button onClick={() => actions.go("/compare")} className="flex w-full items-center justify-between gap-3 text-left">
@@ -696,8 +766,8 @@ function CarsPage({ state, actions, params }) {
   return (
     <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
       <div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><Badge variant="blue"><Filter className="h-3.5 w-3.5" /> Search, filters, sort</Badge><h1 className="mt-3 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">Used cars for sale in Bangladesh</h1><p className="mt-2 max-w-2xl font-medium text-slate-600">Autocomplete-ready search, active chips, range controls, list/grid view, recommendations, and saved alerts.</p></div><div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => actions.createAlert({ name: filters.q || "Saved car search", filters, matches: filtered.length })}><Bell className="h-4 w-4" /> Create alert</Button><Button onClick={() => actions.go("/sell")}>Post ad</Button></div></div>
-      <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
-        <aside className="h-fit rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[320px_1fr]">
+        <aside className="h-fit min-w-0 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
           <h2 className="flex items-center gap-2 text-lg font-black"><Filter className="h-5 w-5 text-blue-700" /> Filters</h2>
           <div className="mt-5 grid gap-4">
             <TextInput label="Keyword" value={filters.q} onChange={(event) => setFilter("q", event.target.value)} list="search-options" placeholder="Allion, hybrid, Dhaka..." />
@@ -715,12 +785,12 @@ function CarsPage({ state, actions, params }) {
             ].map(([key, label]) => <label key={key} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm font-black text-slate-700"><input type="checkbox" checked={filters[key]} onChange={(event) => setFilter(key, event.target.checked)} /> {label}</label>)}
           </div>
         </aside>
-        <section>
+        <section className="min-w-0">
           <div className="mb-4 rounded-xl bg-white px-5 py-4 shadow-sm ring-1 ring-slate-200">
-            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><p className="font-black text-slate-950">Showing {filtered.length} of {approvedOnly(state.listings).length} approved listings</p><p className="text-sm font-bold text-slate-500">Saved {state.saved.length} - Compare {state.compare.length}/3</p></div><div className="flex gap-2"><select value={sort} onChange={(event) => setSort(event.target.value)} className="h-11 rounded-lg border border-slate-200 bg-white px-4 text-sm font-black outline-none"><option value="newest">Newest listed</option><option value="low">Price low-high</option><option value="high">Price high-low</option><option value="mileage">Mileage lowest</option><option value="views">Most viewed</option><option value="distance">Distance nearest first</option></select><Button variant={view === "grid" ? "blue" : "secondary"} onClick={() => setView("grid")}>Grid</Button><Button variant={view === "list" ? "blue" : "secondary"} onClick={() => setView("list")}>List</Button></div></div>
-            {activeChips.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{activeChips.map(([key, value]) => <button key={key} onClick={() => setFilter(key, typeof value === "boolean" ? false : "All")} className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700 ring-1 ring-blue-100">{key}: {String(value)} x</button>)}</div>}
+            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><p className="font-black text-slate-950">Showing {filtered.length} of {approvedOnly(state.listings).length} approved listings</p><p className="text-sm font-bold text-slate-500">Saved {state.saved.length} - Compare {state.compare.length}/3</p></div><div className="flex min-w-0 flex-wrap gap-2"><select value={sort} onChange={(event) => setSort(event.target.value)} className="h-11 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm font-black outline-none sm:flex-none sm:px-4"><option value="newest">Newest listed</option><option value="low">Price low-high</option><option value="high">Price high-low</option><option value="mileage">Mileage lowest</option><option value="views">Most viewed</option><option value="distance">Distance nearest first</option></select><Button variant={view === "grid" ? "blue" : "secondary"} onClick={() => setView("grid")}>Grid</Button><Button variant={view === "list" ? "blue" : "secondary"} onClick={() => setView("list")}>List</Button></div></div>
+            <AnimatePresence initial={false}>{activeChips.length > 0 && <motion.div {...panelMotion} className="mt-4 flex flex-wrap gap-2">{activeChips.map(([key, value]) => <motion.button layout key={key} {...itemMotion} onClick={() => setFilter(key, typeof value === "boolean" ? false : "All")} className="motion-control rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700 ring-1 ring-blue-100">{key}: {String(value)} x</motion.button>)}</motion.div>}</AnimatePresence>
           </div>
-          <div className={classNames("grid gap-6", view === "grid" ? "md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1")}>{filtered.map((listing) => <ListingCard key={listing.id} listing={listing} state={state} actions={actions} compact={view === "list"} />)}</div>
+          <motion.div layout className={classNames("grid gap-6", view === "grid" ? "md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1")}><AnimatePresence initial={false} mode="popLayout">{filtered.map((listing) => <ListingCard key={listing.id} listing={listing} state={state} actions={actions} compact={view === "list"} />)}</AnimatePresence></motion.div>
         </section>
       </div>
     </main>
@@ -747,13 +817,13 @@ function ListingDetailPage({ listing, state, actions }) {
         <section>
           <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
             <div className="relative h-[420px] bg-slate-200">
-              <img src={media[activeImage]} alt={listing.title} className="h-full w-full object-cover" />
+              <motion.img key={`${listing.id}-${activeImage}`} initial={{ opacity: 0.7, scale: 1.003 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.28 }} src={media[activeImage]} alt={listing.title} className="h-full w-full object-cover" />
               <div className="absolute inset-0 bg-gradient-to-t from-slate-950/45 via-transparent to-transparent" />
               <div className="absolute left-4 top-4 flex flex-wrap gap-2">{listing.certified && <Badge variant="green"><ShieldCheck className="h-3.5 w-3.5" /> BanglaWheel Certified</Badge>}{listing.verifiedSeller && <Badge variant="blue"><BadgeCheck className="h-3.5 w-3.5" /> Verified Seller</Badge>}{listing.warrantyCovered && <Badge variant="red"><WalletCards className="h-3.5 w-3.5" /> Warranty Covered</Badge>}{listing.premium && <Badge variant="yellow"><Star className="h-3.5 w-3.5" /> Premium</Badge>}</div>
               {media.length > 1 && (
                 <>
-                  <button type="button" onClick={() => moveImage(-1)} className="absolute left-4 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-slate-950 shadow-lg hover:bg-white" aria-label="Previous image"><ChevronRight className="h-5 w-5 rotate-180" /></button>
-                  <button type="button" onClick={() => moveImage(1)} className="absolute right-4 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-slate-950 shadow-lg hover:bg-white" aria-label="Next image"><ChevronRight className="h-5 w-5" /></button>
+                  <button type="button" onClick={() => moveImage(-1)} className="absolute left-4 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-slate-950 shadow-lg transition-transform duration-150 hover:bg-white active:-translate-y-1/2 active:scale-95" aria-label="Previous image"><ChevronRight className="h-5 w-5 rotate-180" /></button>
+                  <button type="button" onClick={() => moveImage(1)} className="absolute right-4 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-slate-950 shadow-lg transition-transform duration-150 hover:bg-white active:-translate-y-1/2 active:scale-95" aria-label="Next image"><ChevronRight className="h-5 w-5" /></button>
                 </>
               )}
               <div className="absolute bottom-4 left-4 right-4 flex items-end justify-between gap-3">
@@ -763,7 +833,7 @@ function ListingDetailPage({ listing, state, actions }) {
             </div>
             <div className="sticky top-[76px] z-20 grid gap-2 border-b border-slate-100 bg-white/95 p-3 backdrop-blur md:grid-cols-5"><QuickStat label="Price" value={formatBDT(listing.price)} /><QuickStat label="Year" value={listing.year} /><QuickStat label="KM" value={`${listing.mileage.toLocaleString()} km`} /><QuickStat label="Fuel" value={listing.fuel} /><QuickStat label="Location" value={listing.city} /></div>
             <div className="p-6 lg:p-8">
-              <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start"><div><h1 className="text-3xl font-black tracking-tight text-slate-950">{listing.title}</h1><p className="mt-2 flex items-center gap-2 font-bold text-slate-500"><MapPin className="h-4 w-4 text-red-500" /> {listing.area}, {listing.city}</p><p className="mt-4 text-4xl font-black text-red-600">{formatBDT(listing.price)}</p><p className="mt-1 text-sm font-bold text-slate-500">{listing.negotiable ? "Negotiable" : "Fixed price"} - Posted {dateShort(listing.postedAt)}</p></div><div className="flex flex-wrap gap-2"><Button variant={state.saved.includes(listing.id) ? "primary" : "secondary"} onClick={() => actions.toggleSave(listing.id)}><Heart className="h-4 w-4" /> Save</Button><Button variant={state.compare.includes(listing.id) ? "blue" : "secondary"} onClick={() => actions.toggleCompare(listing.id)}><BarChart3 className="h-4 w-4" /> Compare</Button><Button variant="secondary">Share</Button></div></div>
+              <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start"><div><h1 className="text-3xl font-black tracking-tight text-slate-950">{listing.title}</h1><p className="mt-2 flex items-center gap-2 font-bold text-slate-500"><MapPin className="h-4 w-4 text-red-500" /> {listing.area}, {listing.city}</p><p className="mt-4 text-4xl font-black text-red-600">{formatBDT(listing.price)}</p><p className="mt-1 text-sm font-bold text-slate-500">{listing.negotiable ? "Negotiable" : "Fixed price"} - Posted {dateShort(listing.postedAt)}</p></div><div className="flex flex-wrap gap-2"><Button variant={state.saved.includes(listing.id) ? "primary" : "secondary"} disabled={actions.isPending("toggleSave", listing.id)} onClick={() => actions.toggleSave(listing.id)}><Heart className="h-4 w-4" /> {state.saved.includes(listing.id) ? "Saved" : "Save"}</Button><Button variant={state.compare.includes(listing.id) ? "blue" : "secondary"} disabled={actions.isPending("toggleCompare", listing.id)} onClick={() => actions.toggleCompare(listing.id)}><BarChart3 className="h-4 w-4" /> {state.compare.includes(listing.id) ? "Added" : "Compare"}</Button><Button variant="secondary" onClick={() => actions.shareListing(listing)}>Share</Button></div></div>
               <div className="mt-8 grid gap-6 lg:grid-cols-2"><InfoPanel title="Description"><p className="leading-7 text-slate-600">{listing.description}</p></InfoPanel><InfoPanel title="Full specification"><SpecGrid listing={listing} /></InfoPanel></div>
               <InfoPanel title="Credibility report" className="mt-8">{listing.inspectionReport ? <div className="grid gap-4 lg:grid-cols-[220px_1fr]"><div className="rounded-xl bg-emerald-50 p-5 text-center ring-1 ring-emerald-100"><p className="text-sm font-black text-emerald-700">Overall score</p><p className="mt-2 text-5xl font-black text-emerald-700">{listing.inspectionReport.overall}/100</p><p className="mt-2 text-sm font-bold text-emerald-900">{listing.inspectionReport.status}</p></div><div className="grid gap-2 md:grid-cols-2">{Object.entries(listing.inspectionReport.sections).map(([name, score]) => <div key={name} className="rounded-lg bg-slate-50 p-3"><p className="text-sm font-black">{name}</p><p className="text-sm font-bold text-slate-500">{score} points - {listing.inspectionReport.garage}</p></div>)}</div></div> : <EmptyState icon={ClipboardCheck} title="No credibility report yet" text="Book a 100-point inspection before token payment." action={<Button variant="blue" onClick={() => actions.go(`/inspect?listing=${listing.id}`)}>Book inspection</Button>} />}</InfoPanel>
               <div className="mt-8 grid gap-6 lg:grid-cols-2"><InfoPanel title="Warranty and escrow">{listing.warranty ? <div><Badge variant="green">Mercantile Islami Insurance placeholder</Badge><p className="mt-3 text-sm font-bold text-slate-600">Coverage: {listing.warranty.period}. Seller deposit held in escrow: {formatBDT(listing.warranty.deposit)}.</p><div className="mt-4 flex flex-wrap gap-2">{listing.warranty.covered.map((item) => <Badge key={item} variant="blue">{item}</Badge>)}</div><p className="mt-4 text-xs font-bold text-slate-500">Not covered: {listing.warranty.excluded.join(", ")}.</p></div> : <p className="text-sm font-bold text-slate-500">Warranty not attached. Admin can add escrow coverage after inspection.</p>}</InfoPanel><InfoPanel title="BRTA paperwork checklist"><Checklist items={["Registration certificate copies", "Tax token current year", "Fitness certificate", "Insurance certificate", "Form T.T.O.", "Seller NID copy", "Non-judicial stamp affidavit", "Bank NOC if under loan"]} /></InfoPanel></div>
@@ -807,6 +877,7 @@ function SellWizard({ state, actions }) {
   const [mediaUploads, setMediaUploads] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
+  const isSubmitting = actions.isPending("addListing");
   const setValue = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   const steps = ["Vehicle Identity", "Engine & Drivetrain", "Condition & History", "Body & Exterior", "Features", "Price & Location", "Media Upload", "Declaration"];
   const uploadImages = async (event) => {
@@ -847,6 +918,17 @@ function SellWizard({ state, actions }) {
     setMediaUploads((current) => current.filter((image) => image.url !== url));
   };
   const submit = async () => {
+    const required = [[form.model, "Model"], [form.chassis, "Chassis / VIN"], [form.mileage, "Mileage"], [form.price, "Asking price"], [form.phone, "Phone number"]];
+    const missing = required.filter(([value]) => !String(value || "").trim()).map(([, label]) => label);
+    if (missing.length) {
+      actions.notify(`Complete these required fields: ${missing.join(", ")}.`);
+      return;
+    }
+    if (!mediaUploads.length) {
+      actions.notify("Upload at least one vehicle photo before submitting.");
+      setStep(6);
+      return;
+    }
     const grouped = Object.fromEntries(Object.entries(featureGroups).map(([group, items]) => [group, items.filter((item) => form.selectedFeatures.includes(item))]));
     const media = mediaUploads.length ? mediaUploads.map((image) => image.url) : [];
     const saved = await actions.addListing({ title: `${form.year} ${form.make} ${form.model || "Model"} ${form.variant}`, ...form, sellerId: state.profile.id, year: Number(form.year), price: numberFrom(form.price), mileage: numberFrom(form.mileage), doors: Number(form.doors), seats: Number(form.seats), horsepower: numberFrom(form.horsepower), media, mediaUploads, mediaReady: mediaUploads.length > 0 || form.mediaReady, features: grouped, sellerType: state.profile.role === "dealer" ? "Dealer" : "Private Seller", verifiedSeller: false, kycStatus: "pending", certified: false, warrantyCovered: false, auctionEnabled: false, description: "Seller submitted this complete 8-step listing for BanglaWheel admin review." });
@@ -856,10 +938,10 @@ function SellWizard({ state, actions }) {
     <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
       <div className="mb-8"><Badge variant="red"><Car className="h-3.5 w-3.5" /> Seller center</Badge><h1 className="mt-3 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">Eight-step listing submission</h1><p className="mt-2 max-w-3xl font-medium text-slate-600">Structured fields keep data ready for search, recommendations, inspection, KYC, warranty, and SEO.</p></div>
       <div className="grid gap-8 lg:grid-cols-[280px_1fr]">
-        <aside className="h-fit rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">{steps.map((label, index) => <button key={label} onClick={() => setStep(index)} className={classNames("mb-2 flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-black", step === index ? "bg-blue-700 text-white" : "bg-slate-50 text-slate-600")}><span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/20 text-xs">{index + 1}</span>{label}</button>)}</aside>
+        <aside className="h-fit rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">{steps.map((label, index) => <button key={label} onClick={() => setStep(index)} aria-current={step === index ? "step" : undefined} className={classNames("motion-control mb-2 flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-black", step === index ? "bg-blue-700 text-white" : "bg-slate-50 text-slate-600 hover:bg-blue-50")}><span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/20 text-xs">{index + 1}</span>{label}</button>)}</aside>
         <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <h2 className="text-2xl font-black">{steps[step]}</h2>
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
+          <motion.div key={step} {...panelMotion} className="mt-6 grid gap-4 md:grid-cols-2">
             {step === 0 && <><SelectField label="Make / Brand" value={form.make} onChange={(e) => setValue("make", e.target.value)}>{makes.map((x) => <option key={x}>{x}</option>)}</SelectField><TextInput label="Model" value={form.model} onChange={(e) => setValue("model", e.target.value)} required /><SelectField label="Year" value={form.year} onChange={(e) => setValue("year", e.target.value)}>{Array.from({ length: 37 }, (_, i) => 1990 + i).map((x) => <option key={x}>{x}</option>)}</SelectField><TextInput label="Variant / Grade" value={form.variant} onChange={(e) => setValue("variant", e.target.value)} /><TextInput label="Chassis / VIN" value={form.chassis} onChange={(e) => setValue("chassis", e.target.value)} required /><TextInput label="Registration No." value={form.registrationNo} onChange={(e) => setValue("registrationNo", e.target.value)} /><SelectField label="Import Grade" value={form.auctionGrade} onChange={(e) => setValue("auctionGrade", e.target.value)}>{["6", "5", "4.5", "4", "3.5", "3", "2", "1", "R", "RA", "N/A"].map((x) => <option key={x}>{x}</option>)}</SelectField><SelectField label="Import Type" value={form.importType} onChange={(e) => setValue("importType", e.target.value)}>{["Reconditioned (JDM)", "Brand New", "Local second-hand"].map((x) => <option key={x}>{x}</option>)}</SelectField></>}
             {step === 1 && <><SelectField label="Displacement" value={form.displacement} onChange={(e) => setValue("displacement", e.target.value)}>{["Under 660", "660-1000", "1001-1300", "1301-1500", "1501-1800", "1801-2000", "2001-2500", "Over 2500"].map((x) => <option key={x}>{x}</option>)}</SelectField><SelectField label="Fuel Type" value={form.fuel} onChange={(e) => setValue("fuel", e.target.value)}>{fuels.map((x) => <option key={x}>{x}</option>)}</SelectField><SelectField label="Transmission" value={form.transmission} onChange={(e) => setValue("transmission", e.target.value)}>{transmissions.map((x) => <option key={x}>{x}</option>)}</SelectField><SelectField label="Drive Type" value={form.driveType} onChange={(e) => setValue("driveType", e.target.value)}>{["FWD", "RWD", "AWD", "4WD"].map((x) => <option key={x}>{x}</option>)}</SelectField><TextInput label="Engine Code" value={form.engineCode} onChange={(e) => setValue("engineCode", e.target.value)} /><TextInput label="Horsepower" value={form.horsepower} onChange={(e) => setValue("horsepower", e.target.value)} /><label className="flex items-center gap-2 rounded-lg bg-slate-50 p-3 text-sm font-black"><input type="checkbox" checked={form.turbo} onChange={(e) => setValue("turbo", e.target.checked)} /> Turbo</label></>}
             {step === 2 && <><TextInput label="Odometer Reading" value={form.mileage} onChange={(e) => setValue("mileage", e.target.value)} /><SelectField label="Previous Owners" value={form.previousOwners} onChange={(e) => setValue("previousOwners", e.target.value)}>{["1", "2", "3", "4+"].map((x) => <option key={x}>{x}</option>)}</SelectField><SelectField label="Accident History" value={form.accidentHistory} onChange={(e) => setValue("accidentHistory", e.target.value)}>{["No accident", "Minor (repaired)", "Major (repaired)", "Unknown"].map((x) => <option key={x}>{x}</option>)}</SelectField><SelectField label="Flood History" value={form.floodHistory} onChange={(e) => setValue("floodHistory", e.target.value)}>{["No", "Yes", "Unknown"].map((x) => <option key={x}>{x}</option>)}</SelectField><SelectField label="Overall Condition" value={form.condition} onChange={(e) => setValue("condition", e.target.value)}>{["Excellent", "Very Good", "Good", "Fair", "Needs Work"].map((x) => <option key={x}>{x}</option>)}</SelectField><TextInput label="Last Service Date" type="date" value={form.lastServiceDate} onChange={(e) => setValue("lastServiceDate", e.target.value)} /></>}
@@ -868,7 +950,7 @@ function SellWizard({ state, actions }) {
             {step === 5 && <><TextInput label="Asking Price (BDT)" value={form.price} onChange={(e) => setValue("price", e.target.value)} /><SelectField label="Division" value={form.division} onChange={(e) => setValue("division", e.target.value)}>{cities.map((x) => <option key={x}>{x}</option>)}</SelectField><TextInput label="District" value={form.district} onChange={(e) => setValue("district", e.target.value)} /><TextInput label="Area / Thana" value={form.area} onChange={(e) => setValue("area", e.target.value)} /><SelectField label="Preferred Contact" value={form.preferredContact} onChange={(e) => setValue("preferredContact", e.target.value)}>{["WhatsApp only", "Phone only", "Both"].map((x) => <option key={x}>{x}</option>)}</SelectField><TextInput label="Phone Number" value={form.phone} onChange={(e) => setValue("phone", e.target.value)} /></>}
             {step === 6 && (
               <div className="md:col-span-2">
-                <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-blue-200 bg-blue-50 px-5 py-8 text-center transition hover:bg-blue-100">
+                <label className="motion-control flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-blue-200 bg-blue-50 px-5 py-8 text-center hover:bg-blue-100">
                   <Upload className="h-8 w-8 text-blue-700" />
                   <span className="mt-3 text-sm font-black text-blue-950">{isUploading ? "Uploading..." : "Upload listing photos"}</span>
                   <span className="mt-1 text-xs font-bold text-blue-800">JPG, PNG, WebP, or GIF. Up to 12 images, 8 MB each.</span>
@@ -891,8 +973,8 @@ function SellWizard({ state, actions }) {
               </div>
             )}
             {step === 7 && <div className="md:col-span-2"><Checklist items={["I confirm this vehicle is legally mine to sell.", "All information provided is accurate to the best of my knowledge.", "I agree to BanglaWheel Terms and Privacy Policy.", "I consent to NID verification via Bangladesh Election Commission database."]} /><label className="mt-5 flex items-center gap-3 rounded-xl bg-emerald-50 p-4 text-sm font-black text-emerald-900"><input type="checkbox" checked={form.declarations} onChange={(e) => setValue("declarations", e.target.checked)} /> I accept all declarations</label></div>}
-          </div>
-          <div className="mt-8 flex flex-wrap justify-between gap-3"><Button variant="secondary" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}>Back</Button>{step < steps.length - 1 ? <Button variant="blue" onClick={() => setStep((value) => Math.min(steps.length - 1, value + 1))}>Continue</Button> : <Button onClick={submit} disabled={!form.declarations}>Submit for approval</Button>}</div>
+          </motion.div>
+          <div className="mt-8 flex flex-wrap justify-between gap-3"><Button variant="secondary" disabled={step === 0 || isSubmitting} onClick={() => setStep((value) => Math.max(0, value - 1))}>Back</Button>{step < steps.length - 1 ? <Button variant="blue" onClick={() => setStep((value) => Math.min(steps.length - 1, value + 1))}>Continue</Button> : <Button onClick={submit} disabled={!form.declarations || isSubmitting} aria-busy={isSubmitting}>{isSubmitting ? <><RefreshCw className="h-4 w-4 animate-spin" /> Submitting...</> : "Submit for approval"}</Button>}</div>
         </section>
       </div>
     </main>
@@ -960,16 +1042,19 @@ function GaragesPage({ state }) {
 function InspectPage({ state, actions, params }) {
   const [form, setForm] = useState({ listingId: params.get("listing") || state.listings[0]?.id || "", garageId: state.garages[0]?.id || "", name: state.profile.name, phone: state.profile.phone, preferredDate: "", packageName: "100-point pre-purchase inspection" });
   const score = inspectionSections.reduce((sum, section) => sum + section.points, 0);
-  return <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8"><div className="mb-8"><Badge variant="green"><ClipboardCheck className="h-3.5 w-3.5" /> Inspection system</Badge><h1 className="mt-3 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">Book and score a 100-point inspection</h1></div><div className="grid gap-8 lg:grid-cols-[1fr_420px]"><section className="grid gap-4 md:grid-cols-2">{inspectionSections.map((section) => <div key={section.name} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200"><div className="flex items-center justify-between"><h2 className="font-black">{section.name}</h2><Badge variant="blue">{section.points} pts</Badge></div><div className="mt-3 grid gap-1 text-xs font-bold text-slate-500">{section.items.slice(0, 8).map((item) => <p key={item}>• {item}</p>)}<p className="font-black text-blue-700">+ {Math.max(0, section.items.length - 8)} more checks</p></div></div>)}</section><form onSubmit={(e) => { e.preventDefault(); actions.addInspection(form); }} className="h-fit rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200"><h2 className="text-xl font-black">Inspection request</h2><p className="mt-2 text-sm font-bold text-slate-500">Total checklist weight: {score} points.</p><div className="mt-5 grid gap-4"><SelectField label="Listing" value={form.listingId} onChange={(e) => setForm({ ...form, listingId: e.target.value })}>{state.listings.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</SelectField><SelectField label="Garage" value={form.garageId} onChange={(e) => setForm({ ...form, garageId: e.target.value })}>{state.garages.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</SelectField><TextInput label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /><TextInput label="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /><TextInput label="Preferred date" type="date" value={form.preferredDate} onChange={(e) => setForm({ ...form, preferredDate: e.target.value })} /><Button type="submit" variant="blue">Request inspection</Button></div></form></div></main>;
+  const pending = actions.isPending("addInspection");
+  return <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8"><div className="mb-8"><Badge variant="green"><ClipboardCheck className="h-3.5 w-3.5" /> Inspection system</Badge><h1 className="mt-3 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">Book and score a 100-point inspection</h1></div><div className="grid gap-8 lg:grid-cols-[1fr_420px]"><section className="grid gap-4 md:grid-cols-2">{inspectionSections.map((section) => <div key={section.name} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200"><div className="flex items-center justify-between"><h2 className="font-black">{section.name}</h2><Badge variant="blue">{section.points} pts</Badge></div><div className="mt-3 grid gap-1 text-xs font-bold text-slate-500">{section.items.slice(0, 8).map((item) => <p key={item}>• {item}</p>)}<p className="font-black text-blue-700">+ {Math.max(0, section.items.length - 8)} more checks</p></div></div>)}</section><form onSubmit={(e) => { e.preventDefault(); actions.addInspection(form); }} className="h-fit rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200"><h2 className="text-xl font-black">Inspection request</h2><p className="mt-2 text-sm font-bold text-slate-500">Total checklist weight: {score} points.</p><div className="mt-5 grid gap-4"><SelectField label="Listing" value={form.listingId} onChange={(e) => setForm({ ...form, listingId: e.target.value })} required>{state.listings.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</SelectField><SelectField label="Garage" value={form.garageId} onChange={(e) => setForm({ ...form, garageId: e.target.value })} required>{state.garages.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</SelectField><TextInput label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /><TextInput label="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} required /><TextInput label="Preferred date" type="date" value={form.preferredDate} onChange={(e) => setForm({ ...form, preferredDate: e.target.value })} required /><Button type="submit" variant="blue" disabled={pending} aria-busy={pending}>{pending ? <><RefreshCw className="h-4 w-4 animate-spin" /> Requesting...</> : "Request inspection"}</Button></div></form></div></main>;
 }
 
 function WarrantyPage({ state, actions }) {
   const [claim, setClaim] = useState({ listingId: state.warranties[0]?.listingId || state.listings[0]?.id || "", issue: "" });
-  return <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8"><div className="mb-8"><Badge variant="red"><WalletCards className="h-3.5 w-3.5" /> Warranty escrow</Badge><h1 className="mt-3 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">Insurance-backed warranty prototype</h1></div><div className="grid gap-8 lg:grid-cols-[1fr_420px]"><section className="grid gap-4 md:grid-cols-2">{[[`Under ${formatBDT(500000)}`, formatBDT(10000), "90 days"], [`${formatBDT(500000)} - ${formatBDT(1000000)}`, formatBDT(20000), "90 days"], [`${formatBDT(1000000)} - ${formatBDT(2000000)}`, formatBDT(35000), "6 months"], [`Above ${formatBDT(2000000)}`, formatBDT(50000), "6 months"]].map(([price, deposit, coverage]) => <div key={price} className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200"><p className="text-sm font-black text-slate-500">{price}</p><p className="mt-3 text-3xl font-black text-red-600">{deposit}</p><p className="mt-2 font-bold text-slate-600">{coverage} coverage</p></div>)}</section><form onSubmit={(e) => { e.preventDefault(); actions.addClaim(claim); setClaim({ ...claim, issue: "" }); }} className="h-fit rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200"><h2 className="text-xl font-black">Open warranty claim</h2><div className="mt-5 grid gap-4"><SelectField label="Warranty car" value={claim.listingId} onChange={(e) => setClaim({ ...claim, listingId: e.target.value })}>{state.warranties.map((w) => <option key={w.id} value={w.listingId}>{state.listings.find((x) => x.id === w.listingId)?.title}</option>)}</SelectField><TextArea label="Issue" value={claim.issue} onChange={(e) => setClaim({ ...claim, issue: e.target.value })} placeholder="Engine, transmission, electrical, AC compressor..." /><Button type="submit">Submit claim</Button></div><div className="mt-5 rounded-xl bg-slate-50 p-4 text-sm font-bold text-slate-600">Status flow: Submitted to Under Review to Approved to Repair Scheduled to Resolved.</div></form></div><div className="mt-8 grid gap-4 md:grid-cols-2">{state.warranties.map((warranty) => <InfoPanel key={warranty.id} title={state.listings.find((x) => x.id === warranty.listingId)?.title || "Warranty"}><p className="font-bold text-slate-600">Escrow: {formatBDT(warranty.deposit)} - {warranty.escrowStatus}</p><div className="mt-3 grid gap-2">{warranty.claims.length ? warranty.claims.map((c) => <p key={c.id} className="rounded-lg bg-slate-50 p-3 text-sm font-bold">{c.issue} - {c.status}</p>) : <p className="text-sm font-bold text-slate-500">No claims.</p>}</div></InfoPanel>)}</div></main>;
+  const pending = actions.isPending("addClaim");
+  return <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8"><div className="mb-8"><Badge variant="red"><WalletCards className="h-3.5 w-3.5" /> Warranty escrow</Badge><h1 className="mt-3 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">Insurance-backed warranty prototype</h1></div><div className="grid gap-8 lg:grid-cols-[1fr_420px]"><section className="grid gap-4 md:grid-cols-2">{[[`Under ${formatBDT(500000)}`, formatBDT(10000), "90 days"], [`${formatBDT(500000)} - ${formatBDT(1000000)}`, formatBDT(20000), "90 days"], [`${formatBDT(1000000)} - ${formatBDT(2000000)}`, formatBDT(35000), "6 months"], [`Above ${formatBDT(2000000)}`, formatBDT(50000), "6 months"]].map(([price, deposit, coverage]) => <div key={price} className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200"><p className="text-sm font-black text-slate-500">{price}</p><p className="mt-3 text-3xl font-black text-red-600">{deposit}</p><p className="mt-2 font-bold text-slate-600">{coverage} coverage</p></div>)}</section><form onSubmit={async (e) => { e.preventDefault(); const saved = await actions.addClaim(claim); if (saved) setClaim({ ...claim, issue: "" }); }} className="h-fit rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200"><h2 className="text-xl font-black">Open warranty claim</h2><div className="mt-5 grid gap-4"><SelectField label="Warranty car" value={claim.listingId} onChange={(e) => setClaim({ ...claim, listingId: e.target.value })} required>{state.warranties.map((w) => <option key={w.id} value={w.listingId}>{state.listings.find((x) => x.id === w.listingId)?.title}</option>)}</SelectField><TextArea label="Issue" value={claim.issue} onChange={(e) => setClaim({ ...claim, issue: e.target.value })} placeholder="Engine, transmission, electrical, AC compressor..." required /><Button type="submit" disabled={pending} aria-busy={pending}>{pending ? <><RefreshCw className="h-4 w-4 animate-spin" /> Submitting...</> : "Submit claim"}</Button></div><div className="mt-5 rounded-xl bg-slate-50 p-4 text-sm font-bold text-slate-600">Status flow: Submitted to Under Review to Approved to Repair Scheduled to Resolved.</div></form></div><div className="mt-8 grid gap-4 md:grid-cols-2">{state.warranties.map((warranty) => <InfoPanel key={warranty.id} title={state.listings.find((x) => x.id === warranty.listingId)?.title || "Warranty"}><p className="font-bold text-slate-600">Escrow: {formatBDT(warranty.deposit)} - {warranty.escrowStatus}</p><div className="mt-3 grid gap-2">{warranty.claims.length ? warranty.claims.map((c) => <p key={c.id} className="rounded-lg bg-slate-50 p-3 text-sm font-bold">{c.issue} - {c.status}</p>) : <p className="text-sm font-bold text-slate-500">No claims.</p>}</div></InfoPanel>)}</div></main>;
 }
 
 function FinancingPage({ state, actions }) {
   const [form, setForm] = useState({ price: "3500000", down: "30", tenure: "5", name: state.profile.name, phone: state.profile.phone });
+  const pending = actions.isPending("submitLead");
   const price = numberFrom(form.price);
   const downPayment = Math.round(price * (Number(form.down) / 100));
   const principal = Math.max(0, price - downPayment);
@@ -1005,7 +1090,7 @@ function FinancingPage({ state, actions }) {
             <SelectField label="Tenure" value={form.tenure} onChange={(e) => setForm({ ...form, tenure: e.target.value })}>{["1", "2", "3", "4", "5"].map((x) => <option key={x} value={x}>{x} years</option>)}</SelectField>
             <TextInput label="Applicant name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <TextInput label="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-            <Button onClick={() => actions.submitLead({ listingId: "finance", listingTitle: "Financing application", sellerName: "Finance desk", sellerPhone: "096000000", buyerName: form.name, buyerPhone: form.phone, message: `Financing lead request for ${formatBDT(price)} car` })}>Apply Now</Button>
+            <Button disabled={pending || !form.name.trim() || !form.phone.trim() || price <= 0} aria-busy={pending} onClick={() => actions.submitLead({ listingId: "finance", listingTitle: "Financing application", sellerName: "Finance desk", sellerPhone: "096000000", buyerName: form.name, buyerPhone: form.phone, message: `Financing lead request for ${formatBDT(price)} car` })}>{pending ? <><RefreshCw className="h-4 w-4 animate-spin" /> Applying...</> : "Apply now"}</Button>
           </div>
           <div className="mt-5 grid gap-2 rounded-xl bg-blue-50 p-4 text-sm font-bold text-blue-950">
             <p className="flex justify-between"><span>Down payment</span><span>{formatBDT(downPayment)}</span></p>
@@ -1030,7 +1115,12 @@ function FinancingPage({ state, actions }) {
 }
 
 function PaperworkPage() {
-  return <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8"><div className="mb-8"><Badge variant="green"><FileCheck2 className="h-3.5 w-3.5" /> BRTA paperwork</Badge><h1 className="mt-3 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">Ownership transfer guide and fee checklist</h1></div><div className="grid gap-6 lg:grid-cols-[1fr_360px]"><InfoPanel title="Documents to check"><Checklist items={["Registration Certificate: chassis must match and not be mortgaged.", "Tax Token: current year and chassis matches.", "Fitness Certificate: not expired.", "Insurance Certificate: valid and chassis matches.", "Form T.T.O.: seller signs transfer order.", "Seller NID: name and photo match seller.", "Non-Judicial Stamp Affidavit: sworn sale statement.", "Bank NOC: required if under loan."]} /></InfoPanel><InfoPanel title="Fee calculator mock"><TextInput label="Declared value" defaultValue="3500000" /><TextInput label="Engine CC" defaultValue="1500" /><p className="mt-4 rounded-xl bg-blue-50 p-4 text-sm font-black text-blue-900">Estimated transfer preparation: {formatBDT(42500)}. Final BRTA amount depends on registration class and tax status.</p></InfoPanel></div></main>;
+  const [declaredValue, setDeclaredValue] = useState("3500000");
+  const [engineCc, setEngineCc] = useState("1500");
+  const value = numberFrom(declaredValue);
+  const cc = numberFrom(engineCc);
+  const estimate = Math.round(value * 0.01 + Math.max(0, cc - 1000) * 15);
+  return <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8"><div className="mb-8"><Badge variant="green"><FileCheck2 className="h-3.5 w-3.5" /> BRTA paperwork</Badge><h1 className="mt-3 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">Ownership transfer guide and fee checklist</h1></div><div className="grid gap-6 lg:grid-cols-[1fr_360px]"><InfoPanel title="Documents to check"><Checklist items={["Registration Certificate: chassis must match and not be mortgaged.", "Tax Token: current year and chassis matches.", "Fitness Certificate: not expired.", "Insurance Certificate: valid and chassis matches.", "Form T.T.O.: seller signs transfer order.", "Seller NID: name and photo match seller.", "Non-Judicial Stamp Affidavit: sworn sale statement.", "Bank NOC: required if under loan."]} /></InfoPanel><InfoPanel title="Transfer preparation estimate"><div className="grid gap-4"><TextInput label="Declared value" inputMode="numeric" value={declaredValue} onChange={(event) => setDeclaredValue(event.target.value)} /><TextInput label="Engine CC" inputMode="numeric" value={engineCc} onChange={(event) => setEngineCc(event.target.value)} /></div><div className="mt-4 rounded-xl bg-blue-50 p-4"><p className="text-xs font-black uppercase text-blue-700">Estimated preparation</p><p className="mt-1 text-2xl font-black text-blue-950">{formatBDT(estimate)}</p><p className="mt-2 text-xs font-bold leading-5 text-blue-800">Planning estimate only. Confirm the final amount with BRTA for the vehicle class and current tax status.</p></div></InfoPanel></div></main>;
 }
 
 function LearnPage({ state, actions, locale }) {
@@ -1051,8 +1141,7 @@ function AccountPage({ state, actions, path, locale, setLocale }) {
   const tab = path.split("/")[2] || "overview";
   const tabs = [
     ["overview", "Overview"],
-    ["users", "Users"],
-    ["listings", "Listings"],
+    ["listings", "My Listings"],
     // Auction launch is deferred. Restore account bids tab when live bidding returns.
     // ["bids", "Bids"],
     ["warranty", "Warranty"],
@@ -1069,22 +1158,22 @@ function AccountPage({ state, actions, path, locale, setLocale }) {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" onClick={() => actions.go("/compare")}><BarChart3 className="h-4 w-4" /> Compare</Button>
-          <Button onClick={() => actions.go("/sell")}><Car className="h-4 w-4" /> New listing</Button>
+          {["seller", "dealer", "admin"].includes(state.profile.role) && <Button onClick={() => actions.go("/sell")}><Car className="h-4 w-4" /> New listing</Button>}
         </div>
       </div>
       <div className="grid gap-8 lg:grid-cols-[260px_1fr]">
         <aside className="h-fit rounded-2xl bg-white p-3 shadow-sm ring-1 ring-slate-200">
-          {tabs.map(([key, label]) => <button key={key} onClick={() => actions.go(key === "overview" ? "/account" : `/account/${key}`)} className={classNames("mb-2 flex w-full items-center justify-between rounded-lg px-3 py-3 text-left text-sm font-black transition", tab === key ? "bg-blue-700 text-white" : "bg-slate-50 text-slate-600 hover:bg-blue-50 hover:text-blue-700")}><span>{label}</span><ChevronRight className="h-4 w-4" /></button>)}
+          {tabs.map(([key, label]) => <button key={key} onClick={() => actions.go(key === "overview" ? "/account" : `/account/${key}`)} className={classNames("motion-control mb-2 flex w-full items-center justify-between rounded-lg px-3 py-3 text-left text-sm font-black", tab === key ? "bg-blue-700 text-white" : "bg-slate-50 text-slate-600 hover:bg-blue-50 hover:text-blue-700")}><span>{label}</span><ChevronRight className="h-4 w-4" /></button>)}
         </aside>
-        <section>
+        <motion.section key={tab} {...panelMotion}>
           {tab === "overview" && <AccountOverview state={state} actions={actions} />}
           {tab === "listings" && <AccountListings state={state} actions={actions} />}
           {/* Auction launch is deferred. Restore account bid history when live bidding returns. */}
           {/* {tab === "bids" && <AccountBids state={state} actions={actions} />} */}
           {tab === "warranty" && <AccountWarranty state={state} actions={actions} />}
           {tab === "documents" && <KycPanel state={state} actions={actions} />}
-          {tab === "settings" && <SettingsPanel state={state} locale={locale} setLocale={setLocale} />}
-        </section>
+          {tab === "settings" && <SettingsPanel state={state} locale={locale} setLocale={setLocale} actions={actions} />}
+        </motion.section>
       </div>
     </main>
   );
@@ -1102,7 +1191,7 @@ function AccountOverview({ state, actions }) {
         <StatCard label="Notifications" value={state.notifications.length} icon={Bell} tone="green" />
       </div>
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
-        <InfoPanel title="Saved cars">{savedListings.length ? <div className="grid gap-3">{savedListings.map((listing) => <button key={listing.id} onClick={() => actions.go(`/cars/${listing.slug}`)} className="flex items-center gap-3 rounded-xl bg-slate-50 p-3 text-left transition hover:bg-blue-50"><img src={listing.media[0]} alt="" className="h-16 w-20 rounded-lg object-cover" /><span><span className="block font-black">{listing.title}</span><span className="text-sm font-bold text-red-600">{formatBDT(listing.price)}</span></span></button>)}</div> : <EmptyState icon={Heart} title="No saved cars" text="Save listings from browse or detail pages." action={<Button onClick={() => actions.go("/cars")}>Browse cars</Button>} />}</InfoPanel>
+        <InfoPanel title="Saved cars">{savedListings.length ? <div className="grid gap-3">{savedListings.map((listing) => <button key={listing.id} onClick={() => actions.go(`/cars/${listing.slug}`)} className="motion-control flex items-center gap-3 rounded-xl bg-slate-50 p-3 text-left hover:bg-blue-50"><img src={listing.media[0]} alt="" className="h-16 w-20 rounded-lg object-cover" /><span><span className="block font-black">{listing.title}</span><span className="text-sm font-bold text-red-600">{formatBDT(listing.price)}</span></span></button>)}</div> : <EmptyState icon={Heart} title="No saved cars" text="Save listings from browse or detail pages." action={<Button onClick={() => actions.go("/cars")}>Browse cars</Button>} />}</InfoPanel>
         <InfoPanel title="Notifications">{state.notifications.map((note) => <div key={note.id} className="mb-2 rounded-xl bg-slate-50 p-3"><p className="font-black">{note.title}</p><p className="text-sm font-bold text-slate-500">{note.body}</p></div>)}</InfoPanel>
       </div>
     </div>
@@ -1110,21 +1199,38 @@ function AccountOverview({ state, actions }) {
 }
 
 function AccountListings({ state, actions }) {
-  const mine = state.listings.filter((listing) => listing.sellerId === state.profile.id || listing.sellerName === state.profile.name).slice(0, 12);
+  const [status, setStatus] = useState("all");
+  const mine = state.listings
+    .filter((listing) => listing.sellerId === state.profile.id || listing.sellerName === state.profile.name)
+    .sort((a, b) => new Date(b.postedAt || 0) - new Date(a.postedAt || 0));
+  const counts = {
+    all: mine.length,
+    pending: mine.filter((listing) => listing.status === "pending").length,
+    approved: mine.filter((listing) => listing.status === "approved").length,
+    rejected: mine.filter((listing) => listing.status === "rejected").length,
+  };
+  const visible = status === "all" ? mine : mine.filter((listing) => listing.status === status);
   const statusTone = { approved: "green", pending: "yellow", rejected: "red" };
   return (
-    <InfoPanel title="My listings">
-      {mine.length ? <div className="grid gap-3">{mine.map((listing) => (
-        <div key={listing.id} className="grid gap-4 rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100 lg:grid-cols-[96px_1fr_auto] lg:items-center">
+    <InfoPanel title="My vehicle inventory">
+      {mine.length ? <>
+        <StatusTabs
+          value={status}
+          onChange={setStatus}
+          tabs={[["all", "All cars"], ["pending", "Pending review"], ["approved", "Approved"], ["rejected", "Rejected"]]}
+          counts={counts}
+        />
+        {visible.length ? <motion.div layout className="mt-5 grid gap-3"><AnimatePresence initial={false} mode="popLayout">{visible.map((listing) => (
+        <motion.div layout="position" {...itemMotion} key={listing.id} className="grid gap-4 rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100 lg:grid-cols-[96px_1fr_auto] lg:items-center">
           <img src={listing.media?.[0] || "https://images.unsplash.com/photo-1542362567-b07e54358753?q=80&w=800&auto=format&fit=crop"} alt="" className="h-20 w-24 rounded-lg object-cover" />
           <div>
             <div className="flex flex-wrap items-center gap-2"><p className="font-black">{listing.title}</p><Badge variant={statusTone[listing.status] || "default"}>{listing.status === "pending" ? "Pending admin review" : listing.status}</Badge></div>
-            <p className="mt-1 text-sm font-bold text-slate-500">{listing.status === "approved" ? `${listing.views.toLocaleString()} views` : "Not visible to buyers yet"} - {formatBDT(listing.price)}</p>
+            <p className="mt-1 text-sm font-bold text-slate-500">{listing.status === "approved" ? `${Number(listing.views || 0).toLocaleString()} views - Live in the marketplace` : listing.status === "pending" ? "Submitted successfully - awaiting admin review" : "Not published - contact support or submit a corrected ad"} - {formatBDT(listing.price)}</p>
             <div className="mt-2 flex flex-wrap gap-2"><Badge variant={listing.kycStatus === "approved" ? "green" : "yellow"}>KYC {listing.kycStatus}</Badge><Badge variant={listing.certified ? "green" : "default"}>{listing.certified ? "Certified" : "Inspection open"}</Badge><Badge variant={listing.warrantyCovered ? "red" : "default"}>{listing.warrantyCovered ? "Warranty" : "No warranty"}</Badge></div>
           </div>
           <div className="flex flex-wrap gap-2">{listing.status === "approved" && <Button variant="secondary" onClick={() => actions.go(`/cars/${listing.slug}`)}>View live ad</Button>}<Button variant="blue" onClick={() => actions.go(`/inspect?listing=${listing.id}`)}>Inspect</Button></div>
-        </div>
-      ))}</div> : <EmptyState icon={Car} title="No listings yet" text="Post a car and it will appear here as pending until an admin approves it." action={<Button onClick={() => actions.go("/sell")}>Post your first ad</Button>} />}
+        </motion.div>
+      ))}</AnimatePresence></motion.div> : <EmptyState icon={Car} title={`No ${status} listings`} text="There are no cars in this status yet." />}</> : <EmptyState icon={Car} title="No listings yet" text="Post a car and it will appear here as pending until an admin approves it." action={<Button onClick={() => actions.go("/sell")}>Post your first ad</Button>} />}
     </InfoPanel>
   );
 }
@@ -1136,6 +1242,7 @@ function AccountListings({ state, actions }) {
 
 function AccountWarranty({ state, actions }) {
   const [claim, setClaim] = useState({ listingId: state.warranties[0]?.listingId || state.listings[0]?.id || "", issue: "" });
+  const pending = actions.isPending("addClaim");
   return (
     <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
       <InfoPanel title="Active warranties and claim status">
@@ -1144,12 +1251,12 @@ function AccountWarranty({ state, actions }) {
           return <div key={warranty.id} className="mb-3 rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100"><p className="font-black">{listing?.title}</p><p className="mt-1 text-sm font-bold text-slate-500">{warranty.status} - Escrow {formatBDT(warranty.deposit)} - {warranty.period}</p><div className="mt-3 grid gap-2">{warranty.claims.length ? warranty.claims.map((claimItem) => <p key={claimItem.id} className="rounded-lg bg-white p-3 text-sm font-bold">{claimItem.issue} - {claimItem.status}</p>) : <p className="text-sm font-bold text-slate-500">No active claims.</p>}</div></div>;
         })}
       </InfoPanel>
-      <form onSubmit={(e) => { e.preventDefault(); actions.addClaim(claim); setClaim({ ...claim, issue: "" }); }} className="h-fit rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+      <form onSubmit={async (e) => { e.preventDefault(); const saved = await actions.addClaim(claim); if (saved) setClaim({ ...claim, issue: "" }); }} className="h-fit rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
         <h2 className="text-xl font-black">Submit warranty claim</h2>
         <div className="mt-5 grid gap-4">
-          <SelectField label="Warranty car" value={claim.listingId} onChange={(e) => setClaim({ ...claim, listingId: e.target.value })}>{state.warranties.map((w) => <option key={w.id} value={w.listingId}>{state.listings.find((x) => x.id === w.listingId)?.title}</option>)}</SelectField>
-          <TextArea label="Issue" value={claim.issue} onChange={(e) => setClaim({ ...claim, issue: e.target.value })} placeholder="Describe engine, transmission, electrical, or AC issue..." />
-          <Button type="submit">Submit claim</Button>
+          <SelectField label="Warranty car" value={claim.listingId} onChange={(e) => setClaim({ ...claim, listingId: e.target.value })} required>{state.warranties.map((w) => <option key={w.id} value={w.listingId}>{state.listings.find((x) => x.id === w.listingId)?.title}</option>)}</SelectField>
+          <TextArea label="Issue" value={claim.issue} onChange={(e) => setClaim({ ...claim, issue: e.target.value })} placeholder="Describe engine, transmission, electrical, or AC issue..." required />
+          <Button type="submit" disabled={pending} aria-busy={pending}>{pending ? <><RefreshCw className="h-4 w-4 animate-spin" /> Submitting...</> : "Submit claim"}</Button>
         </div>
       </form>
     </div>
@@ -1158,11 +1265,19 @@ function AccountWarranty({ state, actions }) {
 
 function KycPanel({ state, actions }) {
   const [form, setForm] = useState({ name: state.profile.name, phone: state.profile.phone, nid: "", dob: "", type: "Seller", documents: ["NID front", "NID back", "Selfie holding NID"] });
-  return <InfoPanel title="Seller KYC"><div className="grid gap-4 md:grid-cols-2"><TextInput label="Phone OTP" value="123456" readOnly /><TextInput label="NID number" value={form.nid} onChange={(e) => setForm({ ...form, nid: e.target.value })} /><TextInput label="Full name as on NID" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /><TextInput label="Date of birth" type="date" value={form.dob} onChange={(e) => setForm({ ...form, dob: e.target.value })} /></div><div className="mt-5 grid gap-3 md:grid-cols-3">{form.documents.map((doc) => <div key={doc} className="rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 p-5 text-center"><Upload className="mx-auto h-7 w-7 text-slate-400" /><p className="mt-2 text-sm font-black">{doc}</p></div>)}</div><Button className="mt-5" onClick={() => actions.addKyc(form)}>Submit KYC</Button></InfoPanel>;
+  const pending = actions.isPending("addKyc");
+  return <InfoPanel title="Seller KYC"><form onSubmit={(event) => { event.preventDefault(); actions.addKyc({ ...form, sellerId: state.profile.id }); }}><div className="grid gap-4 md:grid-cols-2"><TextInput label="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} required /><TextInput label="NID number" value={form.nid} onChange={(e) => setForm({ ...form, nid: e.target.value })} required /><TextInput label="Full name as on NID" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /><TextInput label="Date of birth" type="date" value={form.dob} onChange={(e) => setForm({ ...form, dob: e.target.value })} required /></div><div className="mt-5 grid gap-3 md:grid-cols-3">{form.documents.map((doc) => <div key={doc} className="rounded-xl bg-slate-50 p-5 text-center ring-1 ring-slate-200"><FileCheck2 className="mx-auto h-7 w-7 text-blue-700" /><p className="mt-2 text-sm font-black">{doc}</p><p className="mt-1 text-xs font-bold text-slate-500">Required at verification appointment</p></div>)}</div><Button className="mt-5" type="submit" disabled={pending} aria-busy={pending}>{pending ? <><RefreshCw className="h-4 w-4 animate-spin" /> Submitting...</> : "Submit KYC"}</Button></form></InfoPanel>;
 }
 
-function SettingsPanel({ state, locale, setLocale }) {
-  return <InfoPanel title="Profile, notifications, language, budget"><div className="grid gap-4 md:grid-cols-2"><TextInput label="Name" defaultValue={state.profile.name} /><TextInput label="Phone" defaultValue={state.profile.phone} /><SelectField label="Language" value={locale} onChange={(e) => setLocale(e.target.value)}><option value="en">English</option><option value="bn">Bangla</option></SelectField><TextInput label="Budget min" defaultValue={state.profile.budgetMin} /><TextInput label="Budget max" defaultValue={state.profile.budgetMax} /><SelectField label="Division" defaultValue={state.profile.division}>{cities.map((x) => <option key={x}>{x}</option>)}</SelectField></div></InfoPanel>;
+function SettingsPanel({ state, locale, setLocale, actions }) {
+  const [form, setForm] = useState({ name: state.profile.name, phone: state.profile.phone, language: locale, budgetMin: String(state.profile.budgetMin), budgetMax: String(state.profile.budgetMax), division: state.profile.division });
+  const pending = actions.isPending("updateProfile");
+  const submit = async (event) => {
+    event.preventDefault();
+    const saved = await actions.updateProfile({ ...form, budgetMin: numberFrom(form.budgetMin), budgetMax: numberFrom(form.budgetMax) });
+    if (saved) setLocale(form.language);
+  };
+  return <InfoPanel title="Profile, language, and budget"><form onSubmit={submit}><div className="grid gap-4 md:grid-cols-2"><TextInput label="Name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required /><TextInput label="Phone" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /><SelectField label="Language" value={form.language} onChange={(event) => setForm({ ...form, language: event.target.value })}><option value="en">English</option><option value="bn">Bangla</option></SelectField><TextInput label="Budget min" inputMode="numeric" value={form.budgetMin} onChange={(event) => setForm({ ...form, budgetMin: event.target.value })} required /><TextInput label="Budget max" inputMode="numeric" value={form.budgetMax} onChange={(event) => setForm({ ...form, budgetMax: event.target.value })} required /><SelectField label="Division" value={form.division} onChange={(event) => setForm({ ...form, division: event.target.value })}>{cities.map((x) => <option key={x}>{x}</option>)}</SelectField></div><Button className="mt-5" type="submit" variant="blue" disabled={pending} aria-busy={pending}>{pending ? <><RefreshCw className="h-4 w-4 animate-spin" /> Saving...</> : "Save changes"}</Button></form></InfoPanel>;
 }
 
 function AdminPage({ state, actions, path }) {
@@ -1178,7 +1293,56 @@ function AdminPage({ state, actions, path }) {
     ["analytics", "Analytics"],
   ];
   const pending = state.listings.filter((x) => x.status === "pending");
-  return <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8"><div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><Badge variant="dark"><LayoutDashboard className="h-3.5 w-3.5 text-red-400" /> Admin</Badge><h1 className="mt-3 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">Marketplace control center</h1><p className="mt-2 font-medium text-slate-600">Admin remains English-only in V1.</p></div><Button variant="secondary" onClick={actions.reset}><RefreshCw className="h-4 w-4" /> Restore demo data</Button></div><div className="mb-6 flex gap-2 overflow-x-auto rounded-xl bg-white p-2 shadow-sm ring-1 ring-slate-200">{tabs.map(([key, label]) => <button key={key} onClick={() => actions.go(key === "overview" ? "/admin" : `/admin/${key}`)} className={classNames("min-w-fit rounded-lg px-4 py-2 text-sm font-black", tab === key ? "bg-blue-700 text-white" : "text-slate-600 hover:bg-slate-100")}>{label}</button>)}</div>{tab === "overview" && <AdminOverview state={state} pending={pending} />}{tab === "users" && <AdminUsers state={state} actions={actions} />}{tab === "listings" && <AdminQueue title="Listing moderation" items={state.listings} render={(listing) => <div className="flex flex-col justify-between gap-4 rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100 lg:flex-row lg:items-center"><div><p className="font-black">{listing.title}</p><p className="text-sm font-bold text-slate-500">{listing.status} - {listing.city} - {formatBDT(listing.price)}</p></div><div className="flex flex-wrap gap-2"><Button variant="blue" onClick={() => actions.updateItem("listings", listing.id, { status: "approved", verifiedSeller: true })}>Approve</Button><Button variant="secondary" onClick={() => actions.updateItem("listings", listing.id, { certified: true, verifiedSeller: true, inspectionReport: listing.inspectionReport || state.listings[0]?.inspectionReport || null })}>Certify</Button><Button variant="ghost" onClick={() => actions.updateItem("listings", listing.id, { status: "rejected" })}>Reject</Button><Button variant="ghost" className="text-red-700 hover:bg-red-50" onClick={() => window.confirm(`Delete ${listing.title} permanently?`) && actions.deleteListing(listing.id)}>Delete</Button></div></div>} />}{tab === "sellers" && <AdminQueue title="Seller and dealer KYC review" items={state.kycRequests} render={(kyc) => <QueueCard title={kyc.name} meta={`${kyc.type} - ${kyc.status}`} actions={<><Button variant="blue" onClick={() => actions.updateItem("kycRequests", kyc.id, { status: "approved" })}>Approve</Button><Button variant="ghost" onClick={() => actions.updateItem("kycRequests", kyc.id, { status: "rejected" })}>Reject</Button></>} />} />}{tab === "inspections" && <AdminQueue title="Inspection job assignment" items={state.inspections} render={(item) => <QueueCard title={state.listings.find((x) => x.id === item.listingId)?.title || "Inspection"} meta={`${item.status} - ${item.phone || "phone pending"} - assigned garage ready`} actions={<><Button variant="secondary" onClick={() => actions.updateItem("inspections", item.id, { status: "Assigned" })}>Assign</Button><Button variant="blue" onClick={() => actions.updateItem("inspections", item.id, { status: "Published" })}>Publish</Button></>} />} />}{/* Auction launch is deferred. Restore admin auction controls when live bidding returns. */}{/* {tab === "auctions" && <AdminQueue title="Auction control panel" items={state.auctions} render={(auction) => <QueueCard title={auction.id} meta={`${auction.status} - current ${formatBDT(auction.currentBid)} - reserve ${formatBDT(auction.reservePrice)}`} actions={<><Button variant="secondary" onClick={() => actions.updateItem("auctions", auction.id, { status: "ended" })}>End early</Button><Button variant="blue" onClick={() => actions.updateItem("auctions", auction.id, { winner: "Buyer_DK_**82", status: "deposit due" })}>Declare winner</Button></>} />} />} */}{tab === "analytics" && <AdminAnalytics state={state} />}</main>;
+  return <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8"><div className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><Badge variant="dark"><LayoutDashboard className="h-3.5 w-3.5 text-red-400" /> Admin</Badge><h1 className="mt-3 text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">Marketplace control center</h1><p className="mt-2 font-medium text-slate-600">Admin remains English-only in V1.</p></div><Button variant="secondary" disabled={actions.isPending("reset")} onClick={() => window.confirm("Restore all demo data? Current marketplace changes will be replaced.") && actions.reset()}>{actions.isPending("reset") ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} {actions.isPending("reset") ? "Restoring..." : "Restore demo data"}</Button></div><div className="mb-6 flex gap-2 overflow-x-auto rounded-xl bg-white p-2 shadow-sm ring-1 ring-slate-200">{tabs.map(([key, label]) => <button key={key} onClick={() => actions.go(key === "overview" ? "/admin" : `/admin/${key}`)} className={classNames("motion-control min-w-fit rounded-lg px-4 py-2 text-sm font-black", tab === key ? "bg-blue-700 text-white" : "text-slate-600 hover:bg-slate-100")}>{label}</button>)}</div><motion.div key={tab} {...panelMotion}>{tab === "overview" && <AdminOverview state={state} pending={pending} />}{tab === "users" && <AdminUsers state={state} actions={actions} />}{tab === "listings" && <AdminListings state={state} actions={actions} />}{tab === "sellers" && <AdminKycQueue state={state} actions={actions} />}{tab === "inspections" && <AdminInspectionQueue state={state} actions={actions} />}{tab === "analytics" && <AdminAnalytics state={state} />}</motion.div></main>;
+}
+
+function AdminKycQueue({ state, actions }) {
+  return <AdminQueue title="Seller and dealer KYC review" items={state.kycRequests} render={(kyc) => { const pending = actions.isPending("updateItem", kyc.id, "kycRequests"); return <QueueCard title={kyc.name} meta={`${kyc.type} - ${kyc.status}`} actions={<><Button variant={kyc.status === "approved" ? "success" : "blue"} disabled={pending || kyc.status === "approved"} onClick={() => actions.updateItem("kycRequests", kyc.id, { status: "approved" })}>{pending ? "Saving..." : kyc.status === "approved" ? "Approved" : "Approve"}</Button><Button variant="ghost" disabled={pending || kyc.status === "rejected"} onClick={() => actions.updateItem("kycRequests", kyc.id, { status: "rejected" })}>{kyc.status === "rejected" ? "Rejected" : "Reject"}</Button></>} />; }} />;
+}
+
+function AdminInspectionQueue({ state, actions }) {
+  return <AdminQueue title="Inspection job assignment" items={state.inspections} render={(item) => { const pending = actions.isPending("updateItem", item.id, "inspections"); return <QueueCard title={state.listings.find((x) => x.id === item.listingId)?.title || "Inspection"} meta={`${item.status} - ${item.phone || "phone pending"}`} actions={<><Button variant="secondary" disabled={pending || item.status === "Assigned" || item.status === "Published"} onClick={() => actions.updateItem("inspections", item.id, { status: "Assigned" })}>{pending ? "Saving..." : item.status === "Assigned" ? "Assigned" : "Assign"}</Button><Button variant={item.status === "Published" ? "success" : "blue"} disabled={pending || item.status === "Published"} onClick={() => actions.updateItem("inspections", item.id, { status: "Published" })}>{pending ? "Saving..." : item.status === "Published" ? "Published" : "Publish"}</Button></>} />; }} />;
+}
+
+function AdminListings({ state, actions }) {
+  const [status, setStatus] = useState("pending");
+  const counts = {
+    pending: state.listings.filter((listing) => listing.status === "pending").length,
+    approved: state.listings.filter((listing) => listing.status === "approved").length,
+    rejected: state.listings.filter((listing) => listing.status === "rejected").length,
+  };
+  const visible = state.listings.filter((listing) => listing.status === status);
+  const deleteButton = (listing) => {
+    const pending = actions.isPending("deleteListing", listing.id);
+    return <Button variant="ghost" className="text-red-700 hover:bg-red-50" disabled={pending} aria-busy={pending} onClick={() => window.confirm(`Delete ${listing.title} permanently? This cannot be undone.`) && actions.deleteListing(listing.id)}>{pending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} {pending ? "Deleting..." : "Delete"}</Button>;
+  };
+
+  return (
+    <InfoPanel title="Listing moderation">
+      <StatusTabs value={status} onChange={setStatus} tabs={[["pending", "Pending approval"], ["approved", "Approved listings"], ["rejected", "Rejected"]]} counts={counts} />
+      <motion.div layout className="mt-5 grid gap-3">
+        {visible.length === 0 && <EmptyState icon={status === "approved" ? CheckCircle2 : ClipboardCheck} title={`No ${status} listings`} text={status === "pending" ? "New seller submissions will appear here for review." : `There are currently no ${status} listings.`} />}
+        <AnimatePresence initial={false} mode="popLayout">{visible.map((listing) => (
+          <motion.div layout="position" {...itemMotion} key={listing.id} className="flex flex-col justify-between gap-4 rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100 lg:flex-row lg:items-center">
+            <div className="flex min-w-0 items-center gap-4">
+              <img src={listing.media?.[0] || "https://images.unsplash.com/photo-1542362567-b07e54358753?q=80&w=400&auto=format&fit=crop"} alt="" className="h-16 w-20 flex-none rounded-lg object-cover" />
+              <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="truncate font-black">{listing.title}</p><Badge variant={status === "approved" ? "green" : status === "pending" ? "yellow" : "red"}>{status}</Badge>{listing.certified && <Badge variant="green"><BadgeCheck className="h-3.5 w-3.5" /> Certified</Badge>}</div><p className="mt-1 text-sm font-bold text-slate-500">{listing.sellerName} - {listing.city} - {formatBDT(listing.price)}</p></div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {status === "pending" && <><Button variant="blue" disabled={actions.isPending("updateItem", listing.id, "listings")} onClick={() => actions.updateItem("listings", listing.id, { status: "approved", verifiedSeller: true })}>{actions.isPending("updateItem", listing.id, "listings") ? <RefreshCw className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} {actions.isPending("updateItem", listing.id, "listings") ? "Publishing..." : "Approve & publish"}</Button><Button variant="ghost" disabled={actions.isPending("updateItem", listing.id, "listings")} onClick={() => actions.updateItem("listings", listing.id, { status: "rejected" })}>Reject</Button></>}
+              {status === "approved" && <><Button variant="secondary" onClick={() => actions.go(`/cars/${listing.slug}`)}>View live ad</Button>{listing.certified ? <Button variant="success" disabled><BadgeCheck className="h-4 w-4" /> Certified</Button> : Number(listing.inspectionReport?.overall || 0) >= 70 ? <Button variant="secondary" disabled={actions.isPending("updateItem", listing.id, "listings")} aria-busy={actions.isPending("updateItem", listing.id, "listings")} onClick={() => actions.updateItem("listings", listing.id, { certified: true, verifiedSeller: true })}>{actions.isPending("updateItem", listing.id, "listings") ? <><RefreshCw className="h-4 w-4 animate-spin" /> Certifying...</> : <><ShieldCheck className="h-4 w-4" /> Certify listing</>}</Button> : <Button variant="secondary" onClick={() => actions.go(`/inspect?listing=${listing.id}`)}><ClipboardCheck className="h-4 w-4" /> Inspection required</Button>}</>}
+              {status === "rejected" && <Button variant="secondary" disabled={actions.isPending("updateItem", listing.id, "listings")} onClick={() => actions.updateItem("listings", listing.id, { status: "pending" })}>{actions.isPending("updateItem", listing.id, "listings") ? "Moving..." : "Return to review"}</Button>}
+              {deleteButton(listing)}
+            </div>
+          </motion.div>
+        ))}</AnimatePresence>
+      </motion.div>
+    </InfoPanel>
+  );
+}
+
+function StatusTabs({ value, onChange, tabs, counts }) {
+  return <div className="flex gap-2 overflow-x-auto border-b border-slate-200 pb-3" role="tablist">{tabs.map(([key, label]) => <motion.button layout key={key} type="button" role="tab" aria-selected={value === key} onClick={() => onChange(key)} className={classNames("motion-control inline-flex min-w-fit items-center gap-2 rounded-lg px-3 py-2 text-sm font-black", value === key ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200")}><span>{label}</span><motion.span layout className={classNames("rounded-md px-1.5 py-0.5 text-xs", value === key ? "bg-white/15 text-white" : "bg-white text-slate-500")}>{counts[key] || 0}</motion.span></motion.button>)}</div>;
 }
 
 function AdminUsers({ state, actions }) {
@@ -1195,7 +1359,7 @@ function AdminUsers({ state, actions }) {
                   <td className="border-b border-slate-100 p-4 font-black">{user.name || "User"}</td>
                   <td className="border-b border-slate-100 p-4 font-bold text-slate-600">{user.email || "No email"}</td>
                   <td className="border-b border-slate-100 p-4">
-                    <select value={roles.includes(user.role) ? user.role : "buyer"} onChange={(event) => actions.updateRole(user.id, event.target.value)} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-black text-slate-800 outline-none focus:border-blue-600 focus:ring-4 focus:ring-blue-100">
+                    <select value={roles.includes(user.role) ? user.role : "buyer"} disabled={actions.isPending("updateRole", user.id)} onChange={(event) => actions.updateRole(user.id, event.target.value)} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-black text-slate-800 outline-none focus:border-blue-600 focus:ring-4 focus:ring-blue-100 disabled:cursor-wait disabled:opacity-60">
                       {roles.map((role) => <option key={role} value={role}>{role}</option>)}
                     </select>
                   </td>
@@ -1260,16 +1424,16 @@ function AdminAnalytics({ state }) {
 }
 
 function AdminQueue({ title, items, render }) {
-  return <InfoPanel title={title}>{items.length === 0 ? <p className="text-sm font-bold text-slate-500">No records yet.</p> : <div className="grid gap-3">{items.map((item) => <div key={item.id}>{render(item)}</div>)}</div>}</InfoPanel>;
+  return <InfoPanel title={title}>{items.length === 0 ? <p className="text-sm font-bold text-slate-500">No records yet.</p> : <motion.div layout className="grid gap-3"><AnimatePresence initial={false} mode="popLayout">{items.map((item) => <motion.div layout="position" {...itemMotion} key={item.id}>{render(item)}</motion.div>)}</AnimatePresence></motion.div>}</InfoPanel>;
 }
 
 function QueueCard({ title, meta, actions }) {
-  return <div className="flex flex-col justify-between gap-4 rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100 lg:flex-row lg:items-center"><div><p className="font-black">{title}</p><p className="text-sm font-bold text-slate-500">{meta}</p></div><div className="flex flex-wrap gap-2">{actions}</div></div>;
+  return <div className="motion-card flex flex-col justify-between gap-4 rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100 lg:flex-row lg:items-center"><div><p className="font-black">{title}</p><p className="text-sm font-bold text-slate-500">{meta}</p></div><div className="flex flex-wrap gap-2">{actions}</div></div>;
 }
 
-function LegalPage({ slug }) {
+function LegalPage({ slug, actions }) {
   const title = slug.split("-").map((part) => part[0].toUpperCase() + part.slice(1)).join(" ");
-  if (slug === "data-deletion") return <DataDeletionPage />;
+  if (slug === "data-deletion") return <DataDeletionPage actions={actions} />;
   if (slug === "about") return <AboutPage />;
   const bnCopy = {
     "privacy-policy": "BanglaWheel অ্যাকাউন্ট, লিস্টিং, KYC, এনকোয়ারি এবং লেনদেন-সংক্রান্ত তথ্য শুধু মার্কেটপ্লেস পরিচালনা, ট্রাস্ট সিগন্যাল যাচাই, জালিয়াতি প্রতিরোধ এবং ক্রেতা-বিক্রেতাকে সহায়তার জন্য ব্যবহার করে।",
@@ -1278,20 +1442,27 @@ function LegalPage({ slug }) {
   return <main className="mx-auto max-w-4xl px-4 py-14 sm:px-6 lg:px-8"><Badge variant="dark">Legal</Badge><h1 className="mt-5 text-4xl font-black">{title}</h1><div className="mt-8 grid gap-6 md:grid-cols-2"><InfoPanel title="English"><p className="text-lg font-medium leading-9 text-slate-700">{legalCopy[slug]}</p></InfoPanel><InfoPanel title="বাংলা"><p className="text-lg font-medium leading-9 text-slate-700">{bnCopy[slug]}</p></InfoPanel></div></main>;
 }
 
-function DataDeletionPage() {
+function DataDeletionPage({ actions }) {
+  const [form, setForm] = useState({ email: "", phone: "", scope: "All account data", reason: "" });
+  const pending = actions.isPending("submitLead");
+  const submit = async (event) => {
+    event.preventDefault();
+    const saved = await actions.submitLead({ listingId: "data-deletion", listingTitle: "Data deletion request", sellerName: "BanglaWheel Privacy Desk", sellerPhone: "", buyerName: form.email, buyerPhone: form.phone, message: `${form.scope}${form.reason ? ` - ${form.reason}` : ""}` });
+    if (saved) setForm({ email: "", phone: "", scope: "All account data", reason: "" });
+  };
   return (
     <main className="mx-auto max-w-4xl px-4 py-14 sm:px-6 lg:px-8">
       <Badge variant="dark">Legal</Badge>
       <h1 className="mt-5 text-4xl font-black">Data Deletion Request</h1>
       <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_360px]">
-        <form className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+        <form onSubmit={submit} className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <h2 className="text-xl font-black">Request form</h2>
           <div className="mt-5 grid gap-4">
-            <TextInput label="Account email" placeholder="you@example.com" />
-            <TextInput label="Phone number" placeholder="01XXXXXXXXX" />
-            <SelectField label="Data to delete" defaultValue="All account data"><option>All account data</option><option>Saved cars and alerts</option><option>KYC draft documents</option><option>Enquiries and leads</option></SelectField>
-            <TextArea label="Reason" placeholder="Optional" />
-            <Button type="button">Submit request</Button>
+            <TextInput label="Account email" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="you@example.com" required />
+            <TextInput label="Phone number" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="01XXXXXXXXX" required />
+            <SelectField label="Data to delete" value={form.scope} onChange={(event) => setForm({ ...form, scope: event.target.value })}><option>All account data</option><option>Saved cars and alerts</option><option>KYC draft documents</option><option>Enquiries and leads</option></SelectField>
+            <TextArea label="Reason" value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} placeholder="Optional" />
+            <Button type="submit" disabled={pending} aria-busy={pending}>{pending ? <><RefreshCw className="h-4 w-4 animate-spin" /> Submitting...</> : "Submit request"}</Button>
           </div>
         </form>
         <InfoPanel title="বাংলা সারাংশ"><p className="font-medium leading-7 text-slate-700">আপনার ফোন নম্বর এবং ইমেইল দিয়ে সেভড কার, এনকোয়ারি, KYC ড্রাফট এবং নোটিফিকেশন প্রেফারেন্স মুছে ফেলার অনুরোধ করা যাবে। প্রোডাকশনে এটি সাপোর্ট টিকিট তৈরি করবে।</p></InfoPanel>
@@ -1321,8 +1492,16 @@ function ExtensionPage() {
 function ContactModal({ state, actions }) {
   const listing = state.contactListing;
   const [form, setForm] = useState({ name: state.profile.name, phone: state.profile.phone, message: "I am interested in this car. Please contact me with availability and final price." });
-  if (!listing) return null;
-  return <div className="fixed inset-0 z-[100] bg-slate-950/70 p-4 backdrop-blur-sm" onClick={() => actions.openContact(null)}><form onSubmit={(e) => { e.preventDefault(); actions.submitLead({ listingId: listing.id, listingTitle: listing.title, sellerName: listing.sellerName, sellerPhone: listing.phone, buyerName: form.name, buyerPhone: form.phone, message: form.message }); }} className="mx-auto mt-10 max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}><div className="grid md:grid-cols-[0.9fr_1.1fr]"><img src={listing.media[0]} alt={listing.title} className="h-64 w-full object-cover md:h-full" /><div className="p-6"><div className="flex items-start justify-between gap-4"><div><Badge variant="green"><Phone className="h-3.5 w-3.5" /> Login-gated seller lead</Badge><h3 className="mt-3 text-2xl font-black text-slate-950">{listing.title}</h3><p className="mt-1 text-sm font-bold text-slate-500">{listing.sellerName} - {listing.city}</p></div><button type="button" onClick={() => actions.openContact(null)} className="rounded-full p-2 hover:bg-slate-100"><X className="h-5 w-5" /></button></div><div className="mt-5 grid gap-3"><TextInput label="Your name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /><TextInput label="Phone number" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /><TextArea label="Message" value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} /></div><div className="mt-5 rounded-xl bg-blue-50 p-4 text-sm font-bold text-blue-900">Seller phone: {listing.phone}. Asking price: {formatBDT(listing.price)}.</div><Button className="mt-5 w-full" type="submit" variant="blue">Send lead and show phone</Button></div></div></form></div>;
+  const pending = actions.isPending("submitLead");
+  useEffect(() => {
+    if (!listing) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape" && !pending) actions.openContact(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [actions, listing, pending]);
+  return <AnimatePresence>{listing && <motion.div {...backdropMotion} className="fixed inset-0 z-[100] bg-slate-950/70 p-4 backdrop-blur-sm" onClick={() => !pending && actions.openContact(null)}><motion.form {...modalMotion} role="dialog" aria-modal="true" aria-labelledby="contact-modal-title" onSubmit={(e) => { e.preventDefault(); actions.submitLead({ listingId: listing.id, listingTitle: listing.title, sellerName: listing.sellerName, sellerPhone: listing.phone, buyerName: form.name, buyerPhone: form.phone, message: form.message }); }} className="mx-auto mt-10 max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}><div className="grid md:grid-cols-[0.9fr_1.1fr]"><img src={listing.media[0]} alt={listing.title} className="h-64 w-full object-cover md:h-full" /><div className="p-6"><div className="flex items-start justify-between gap-4"><div><Badge variant="green"><Phone className="h-3.5 w-3.5" /> Seller enquiry</Badge><h3 id="contact-modal-title" className="mt-3 text-2xl font-black text-slate-950">{listing.title}</h3><p className="mt-1 text-sm font-bold text-slate-500">{listing.sellerName} - {listing.city}</p></div><button type="button" disabled={pending} onClick={() => actions.openContact(null)} className="motion-control rounded-full p-2 hover:bg-slate-100 disabled:opacity-50" aria-label="Close enquiry"><X className="h-5 w-5" /></button></div><div className="mt-5 grid gap-3"><TextInput label="Your name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /><TextInput label="Phone number" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} required /><TextArea label="Message" value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} required /></div><div className="mt-5 rounded-xl bg-blue-50 p-4 text-sm font-bold text-blue-900">Seller phone: {listing.phone}. Asking price: {formatBDT(listing.price)}.</div><Button className="mt-5 w-full" type="submit" variant="blue" disabled={pending} aria-busy={pending}>{pending ? <><RefreshCw className="h-4 w-4 animate-spin" /> Sending...</> : "Send enquiry"}</Button></div></div></motion.form></motion.div>}</AnimatePresence>;
 }
 
 function VehicleJsonLd({ listing }) {
@@ -1331,17 +1510,21 @@ function VehicleJsonLd({ listing }) {
 }
 
 function Toast({ message, onClose }) {
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
   useEffect(() => {
     if (!message) return undefined;
-    const timer = window.setTimeout(onClose, 2800);
+    const timer = window.setTimeout(() => onCloseRef.current(), 3600);
     return () => window.clearTimeout(timer);
-  }, [message, onClose]);
-  if (!message) return null;
-  return <div className="fixed bottom-5 right-5 z-[120] max-w-sm rounded-xl bg-slate-950 px-4 py-3 text-sm font-bold text-white shadow-2xl ring-1 ring-white/10">{message}</div>;
+  }, [message]);
+  const isError = /error|unable|invalid|wrong|failed|missing|required|not authorized|login required|login to|login before/i.test(message);
+  return <AnimatePresence>{message && <div className="pointer-events-none fixed inset-0 z-[140] flex items-center justify-center p-4" role="status" aria-live="polite"><motion.div key={message} {...toastMotion} className="pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-xl bg-white p-5 shadow-2xl ring-1 ring-slate-200"><div className={classNames("flex h-10 w-10 flex-none items-center justify-center rounded-lg", isError ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600")}>{isError ? <AlertCircle className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}</div><div className="min-w-0 flex-1"><p className="text-xs font-black uppercase text-slate-400">{isError ? "Please check" : "Done"}</p><p className="mt-1 text-sm font-bold leading-6 text-slate-800">{message}</p></div><button type="button" onClick={onClose} className="motion-control rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Dismiss message"><X className="h-4 w-4" /></button></motion.div></div>}</AnimatePresence>;
 }
 
 function CookieBanner({ onAccept }) {
-  return <div className="fixed bottom-4 left-4 right-4 z-[110] mx-auto max-w-4xl rounded-2xl bg-white p-4 shadow-2xl ring-1 ring-slate-200 md:flex md:items-center md:justify-between"><p className="text-sm font-bold text-slate-600">BanglaWheel uses cookies/local storage for language preference, saved cars, search alerts, and prototype account state.</p><Button className="mt-3 md:mt-0" onClick={onAccept}>Accept</Button></div>;
+  return <motion.div {...toastMotion} className="fixed bottom-4 left-4 right-4 z-[110] mx-auto max-w-4xl rounded-2xl bg-white p-4 shadow-2xl ring-1 ring-slate-200 md:flex md:items-center md:justify-between"><p className="text-sm font-bold text-slate-600">BanglaWheel uses cookies/local storage for language preference, saved cars, search alerts, and prototype account state.</p><Button className="mt-3 md:mt-0" onClick={onAccept}>Accept</Button></motion.div>;
 }
 
 function Footer({ go }) {
