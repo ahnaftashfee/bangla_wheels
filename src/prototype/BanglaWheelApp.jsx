@@ -110,6 +110,7 @@ const initialPrototypeState = {
   authPending: false,
   pendingAction: "",
   toast: "",
+  system: { backend: "loading", readOnly: true },
 };
 
 function mutationKey(type, payload = {}) {
@@ -146,7 +147,9 @@ function useBackendPrototype() {
           authReady: true,
           authPending: current.authPending,
           pendingAction: current.pendingAction,
-          toast: current.toast,
+          toast: data.system?.backend === "fallback"
+            ? "Backend unavailable. Showing read-only starter listings."
+            : current.toast,
         }));
       } catch (error) {
         if (loadedSessionToken.current === sessionToken) loadedSessionToken.current = null;
