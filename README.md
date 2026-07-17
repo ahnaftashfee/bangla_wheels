@@ -818,7 +818,46 @@ There is currently no unit, integration, end-to-end, accessibility, visual-regre
 
 ## Deployment guide
 
-The repository has no committed provider-specific deployment configuration. A typical Next.js deployment must provide Node.js server execution because the app uses Node route handlers, Prisma, filesystem fallback code, and server-side Supabase administration.
+The repository requires Node.js server execution because it uses Next.js route handlers, Prisma, and server-side Supabase administration. Production fallback data is memory-only so the application remains compatible with read-only serverless filesystems.
+
+### Vercel deployment
+
+Importing the GitHub repository does **not** import `.env` or `.env.local`; those files are intentionally excluded from Git. Add these variables in **Vercel Project > Settings > Environment Variables** for Production and Preview:
+
+| Vercel variable | Value source |
+| --- | --- |
+| `DATABASE_URL` | Supabase **Transaction pooler** connection string on port `6543`; append `?pgbouncer=true&connection_limit=1` |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase Project Settings/API project URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key; the legacy anon key can use `NEXT_PUBLIC_SUPABASE_ANON_KEY` instead |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase server-only service-role key; mark it sensitive and never add a `NEXT_PUBLIC_` prefix |
+
+Use the exact transaction-pooler string shown by **Supabase Dashboard > Connect > Transaction pooler**. URL-encode special characters in the database password. The repository's `.env.example` shows the required shape without real credentials.
+
+After adding or changing variables, redeploy the application. Vercel environment changes apply only to new deployments. The install lifecycle runs `prisma generate` automatically through `postinstall`.
+
+Verify the deployed backend at:
+
+```text
+https://YOUR_DEPLOYMENT.vercel.app/api/health
+```
+
+A healthy deployment returns status `200` with every check set to `ready`. Status `503` identifies missing browser Auth, server Auth/Storage, or an unreachable database without exposing secrets.
+
+In **Supabase Authentication > URL Configuration**:
+
+1. Set **Site URL** to the production Vercel/custom domain.
+2. Add `http://localhost:3000/**` for local development.
+3. Add the exact production domain.
+4. Add the appropriate Vercel preview wildcard only if preview deployments need Auth.
+
+Before deployment, create the schema against the same Supabase project:
+
+```bash
+npm run db:generate
+npm run db:push
+```
+
+Run schema administration from a trusted local/CI environment with the direct or session-pooler connection, not as an automatic Vercel build step.
 
 ### Deployment sequence
 
@@ -844,7 +883,7 @@ npm start
 
 ### Environment considerations
 
-- `.data` filesystem persistence is not reliable on serverless or ephemeral hosts. Production should not depend on fallback writes.
+- `.data` persistence is development-only. Production/serverless fallback is in-memory and read-only.
 - Prisma connections must be configured for the host's concurrency and Supabase's supported connection method.
 - The service-role key must be available only to server runtime code.
 - The application metadata currently hard-codes `https://banglawheel.com`; update `app/layout.jsx` if the canonical production domain differs.

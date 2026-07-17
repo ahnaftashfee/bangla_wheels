@@ -4,6 +4,7 @@ import { seed } from "./platformSeed.js";
 
 const dataDir = path.join(process.cwd(), ".data");
 const dataFile = path.join(dataDir, "prototype-state.json");
+const localPersistenceEnabled = process.env.NODE_ENV !== "production" && !process.env.VERCEL;
 
 const mutableCollections = new Set([
   "listings",
@@ -61,6 +62,8 @@ async function ensureDataDir() {
 }
 
 export async function readPrototypeState() {
+  if (!localPersistenceEnabled) return initialState();
+
   await ensureDataDir();
   try {
     const raw = await readFile(dataFile, "utf8");
@@ -74,8 +77,10 @@ export async function readPrototypeState() {
 }
 
 export async function writePrototypeState(state) {
-  await ensureDataDir();
   const normalized = normalizeState(state);
+  if (!localPersistenceEnabled) return normalized;
+
+  await ensureDataDir();
   await writeFile(dataFile, JSON.stringify(normalized, null, 2), "utf8");
   return normalized;
 }

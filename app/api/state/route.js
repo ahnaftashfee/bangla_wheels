@@ -13,6 +13,7 @@ function visibleFallbackState(state, auth) {
     : state.listings.filter((listing) => listing.status === "approved" || (profileId && listing.sellerId === profileId));
   return {
     ...state,
+    system: { backend: "fallback", readOnly: process.env.NODE_ENV === "production" },
     profile: auth.profile ? { ...(auth.profile.data || {}), ...auth.profile } : { id: "guest", name: "BanglaWheel User", phone: "", email: "", role: "guest", language: "en", budgetMin: 0, budgetMax: 999999999, division: "Dhaka", verified: false },
     listings,
     users: auth.role === "admin" ? (state.users || []) : [],
@@ -23,7 +24,7 @@ export async function GET(request) {
   const auth = await getAuthContext(request);
   try {
     const state = await readDatabaseState(auth);
-    return NextResponse.json(state);
+    return NextResponse.json({ ...state, system: { backend: "database", readOnly: false } });
   } catch (error) {
     console.error("Database read failed, using local fallback:", error);
     const state = await readPrototypeState();
@@ -42,7 +43,7 @@ export async function POST(request) {
 
   try {
     const result = await applyDatabaseAction(type, safePayload, auth);
-    return NextResponse.json(result);
+    return NextResponse.json({ ...result, state: { ...result.state, system: { backend: "database", readOnly: false } } });
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
       try {
